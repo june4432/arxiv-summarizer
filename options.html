@@ -1,0 +1,349 @@
+<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <title>arXiv Summarizer 설정</title>
+  <style>
+    :root {
+      --bg: #ffffff;
+      --bg-secondary: #f5f5f5;
+      --text: #333333;
+      --text-secondary: #666666;
+      --border: #e0e0e0;
+      --primary: #6366f1;
+      --primary-hover: #5558e3;
+      --success: #10b981;
+      --danger: #ef4444;
+    }
+
+    [data-theme="dark"] {
+      --bg: #1a1a2e;
+      --bg-secondary: #16213e;
+      --text: #eaeaea;
+      --text-secondary: #a0a0a0;
+      --border: #3a3a5a;
+      --primary: #818cf8;
+      --primary-hover: #6366f1;
+    }
+
+    * { box-sizing: border-box; }
+
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      padding: 30px;
+      max-width: 700px;
+      margin: 0 auto;
+      transition: background 0.3s, color 0.3s;
+    }
+
+    h1 {
+      font-size: 24px;
+      margin-bottom: 30px;
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .section {
+      background: var(--bg-secondary);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 20px;
+      margin-bottom: 20px;
+    }
+
+    .section-title {
+      font-size: 16px;
+      font-weight: 600;
+      margin-bottom: 15px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .form-group {
+      margin-bottom: 15px;
+    }
+
+    .form-group:last-child {
+      margin-bottom: 0;
+    }
+
+    label {
+      display: block;
+      font-size: 14px;
+      font-weight: 500;
+      margin-bottom: 6px;
+      color: var(--text-secondary);
+    }
+
+    input[type="text"],
+    input[type="password"],
+    select,
+    textarea {
+      width: 100%;
+      padding: 10px 12px;
+      font-size: 14px;
+      border: 1px solid var(--border);
+      border-radius: 8px;
+      background: var(--bg);
+      color: var(--text);
+      transition: border-color 0.2s;
+    }
+
+    input:focus,
+    select:focus,
+    textarea:focus {
+      outline: none;
+      border-color: var(--primary);
+    }
+
+    textarea {
+      min-height: 120px;
+      resize: vertical;
+      font-family: monospace;
+    }
+
+    .toggle-container {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .toggle {
+      position: relative;
+      width: 50px;
+      height: 26px;
+    }
+
+    .toggle input {
+      opacity: 0;
+      width: 0;
+      height: 0;
+    }
+
+    .toggle-slider {
+      position: absolute;
+      cursor: pointer;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background-color: var(--border);
+      transition: 0.3s;
+      border-radius: 26px;
+    }
+
+    .toggle-slider:before {
+      position: absolute;
+      content: "";
+      height: 20px;
+      width: 20px;
+      left: 3px;
+      bottom: 3px;
+      background-color: white;
+      transition: 0.3s;
+      border-radius: 50%;
+    }
+
+    .toggle input:checked + .toggle-slider {
+      background-color: var(--primary);
+    }
+
+    .toggle input:checked + .toggle-slider:before {
+      transform: translateX(24px);
+    }
+
+    .conditional-section {
+      display: none;
+      margin-top: 15px;
+      padding-top: 15px;
+      border-top: 1px solid var(--border);
+    }
+
+    .conditional-section.active {
+      display: block;
+    }
+
+    .btn {
+      padding: 12px 24px;
+      font-size: 14px;
+      font-weight: 500;
+      border: none;
+      border-radius: 8px;
+      cursor: pointer;
+      transition: background 0.2s;
+    }
+
+    .btn-primary {
+      background: var(--primary);
+      color: white;
+    }
+
+    .btn-primary:hover {
+      background: var(--primary-hover);
+    }
+
+    .btn-group {
+      display: flex;
+      gap: 10px;
+      margin-top: 20px;
+    }
+
+    .status {
+      padding: 10px 15px;
+      border-radius: 8px;
+      font-size: 14px;
+      margin-top: 15px;
+      display: none;
+    }
+
+    .status.success {
+      display: block;
+      background: rgba(16, 185, 129, 0.1);
+      color: var(--success);
+      border: 1px solid var(--success);
+    }
+
+    .status.error {
+      display: block;
+      background: rgba(239, 68, 68, 0.1);
+      color: var(--danger);
+      border: 1px solid var(--danger);
+    }
+
+    .hint {
+      font-size: 12px;
+      color: var(--text-secondary);
+      margin-top: 4px;
+    }
+
+    .api-key-input {
+      position: relative;
+    }
+
+    .api-key-input input {
+      padding-right: 40px;
+    }
+
+    .api-key-toggle {
+      position: absolute;
+      right: 10px;
+      top: 50%;
+      transform: translateY(-50%);
+      background: none;
+      border: none;
+      cursor: pointer;
+      font-size: 16px;
+      color: var(--text-secondary);
+    }
+  </style>
+</head>
+<body>
+  <h1>⚙️ arXiv Summarizer 설정</h1>
+
+  <!-- 테마 설정 -->
+  <div class="section">
+    <div class="section-title">🎨 테마</div>
+    <div class="toggle-container">
+      <span>다크 모드</span>
+      <label class="toggle">
+        <input type="checkbox" id="darkMode">
+        <span class="toggle-slider"></span>
+      </label>
+    </div>
+  </div>
+
+  <!-- API 제공자 설정 -->
+  <div class="section">
+    <div class="section-title">🔗 API 제공자</div>
+    <div class="form-group">
+      <label for="provider">요약 서비스 선택</label>
+      <select id="provider">
+        <option value="n8n">n8n Webhook (커스텀 워크플로우)</option>
+        <option value="claude">Claude API (Anthropic)</option>
+        <option value="openai">OpenAI API</option>
+      </select>
+    </div>
+
+    <!-- n8n 설정 -->
+    <div id="n8nSettings" class="conditional-section active">
+      <div class="form-group">
+        <label for="n8nWebhookUrl">Webhook URL</label>
+        <input type="text" id="n8nWebhookUrl" placeholder="http://localhost:5678/webhook/...">
+        <p class="hint">n8n에서 생성한 Webhook URL을 입력하세요</p>
+      </div>
+    </div>
+
+    <!-- Claude 설정 -->
+    <div id="claudeSettings" class="conditional-section">
+      <div class="form-group">
+        <label for="claudeApiKey">API Key</label>
+        <div class="api-key-input">
+          <input type="password" id="claudeApiKey" placeholder="sk-ant-...">
+          <button type="button" class="api-key-toggle" data-target="claudeApiKey">👁️</button>
+        </div>
+      </div>
+      <div class="form-group">
+        <label for="claudeModel">모델</label>
+        <select id="claudeModel">
+          <option value="claude-sonnet-4-20250514">Claude Sonnet 4 (추천)</option>
+          <option value="claude-opus-4-20250514">Claude Opus 4</option>
+          <option value="claude-3-5-haiku-20241022">Claude 3.5 Haiku (빠름)</option>
+        </select>
+      </div>
+    </div>
+
+    <!-- OpenAI 설정 -->
+    <div id="openaiSettings" class="conditional-section">
+      <div class="form-group">
+        <label for="openaiApiKey">API Key</label>
+        <div class="api-key-input">
+          <input type="password" id="openaiApiKey" placeholder="sk-...">
+          <button type="button" class="api-key-toggle" data-target="openaiApiKey">👁️</button>
+        </div>
+      </div>
+      <div class="form-group">
+        <label for="openaiModel">모델</label>
+        <select id="openaiModel">
+          <option value="gpt-4o">GPT-4o (추천)</option>
+          <option value="gpt-4o-mini">GPT-4o Mini (빠름)</option>
+          <option value="gpt-4-turbo">GPT-4 Turbo</option>
+          <option value="o1">o1 (추론)</option>
+          <option value="o1-mini">o1 Mini</option>
+        </select>
+      </div>
+    </div>
+  </div>
+
+  <!-- 프롬프트 설정 (Claude/OpenAI용) -->
+  <div id="promptSection" class="section" style="display: none;">
+    <div class="section-title">💬 프롬프트 설정</div>
+    <div class="form-group">
+      <label for="summaryLanguage">요약 언어</label>
+      <select id="summaryLanguage">
+        <option value="korean">한국어</option>
+        <option value="english">English</option>
+        <option value="auto">원문 언어 유지</option>
+      </select>
+    </div>
+    <div class="form-group">
+      <label for="userPrompt">사용자 프롬프트</label>
+      <textarea id="userPrompt" placeholder="논문 요약 시 사용할 프롬프트를 입력하세요..."></textarea>
+      <p class="hint">{{title}}, {{abstract}}, {{url}}, {{language}} 변수를 사용할 수 있습니다</p>
+    </div>
+    <button type="button" class="btn" id="resetPrompt" style="background: var(--border); color: var(--text);">기본 프롬프트로 초기화</button>
+  </div>
+
+  <!-- 저장 버튼 -->
+  <div class="btn-group">
+    <button type="button" class="btn btn-primary" id="saveBtn">💾 설정 저장</button>
+  </div>
+
+  <div id="status" class="status"></div>
+
+  <script src="options.js"></script>
+</body>
+</html>
