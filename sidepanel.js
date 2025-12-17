@@ -1,6 +1,23 @@
-let rawMarkdown = '';
 let currentSettings = {};
-let lastUsage = null;
+let currentTab = 'abstract';
+
+// 탭별 상태 관리
+const tabState = {
+  abstract: {
+    markdown: '',
+    usage: null,
+    model: null,
+    paperData: null,
+    isLoading: false
+  },
+  full: {
+    markdown: '',
+    usage: null,
+    model: null,
+    paperData: null,
+    isLoading: false
+  }
+};
 
 // 기본 설정값
 const DEFAULT_SETTINGS = {
@@ -173,19 +190,17 @@ async function loadSettings() {
 
     // 마지막 결과 복원
     if (localData.lastResult) {
-      rawMarkdown = localData.lastResult.markdown || '';
-      lastUsage = localData.lastResult.usage || null;
-      if (rawMarkdown) {
-        const resultDiv = document.getElementById('result');
-        const copyBtn = document.getElementById('copyBtn');
-        resultDiv.innerHTML = marked.parse(rawMarkdown);
-        addCodeCopyButtons();
-        resultDiv.style.display = 'block';
-        copyBtn.style.display = 'block';
-        document.getElementById('status').textContent = '📝 이전 요약 결과';
-        if (lastUsage) {
-          displayTokenInfo(lastUsage, localData.lastResult.model);
-        }
+      const lastTab = localData.lastResult.tab || 'abstract';
+      tabState[lastTab].markdown = localData.lastResult.markdown || '';
+      tabState[lastTab].usage = localData.lastResult.usage || null;
+      tabState[lastTab].model = localData.lastResult.model || null;
+      tabState[lastTab].paperData = localData.lastResult.paperData || null;
+
+      if (tabState[lastTab].markdown) {
+        currentTab = lastTab;
+        updateTabUI();
+        displayTabResult(lastTab);
+        document.getElementById('status').textContent = '📝 이전 결과';
       }
     }
   } catch (e) {
@@ -198,6 +213,52 @@ function updateProviderBadge(provider) {
   const badge = document.getElementById('providerBadge');
   const labels = { n8n: 'n8n', claude: 'Claude', openai: 'OpenAI' };
   badge.textContent = labels[provider] || provider;
+}
+
+// 탭 UI 업데이트
+function updateTabUI() {
+  document.querySelectorAll('.tab-btn').forEach(btn => {
+    const tab = btn.dataset.tab;
+    btn.classList.toggle('active', tab === currentTab);
+    btn.classList.toggle('loading', tabState[tab].isLoading);
+  });
+  // 현재 탭이 로딩 중이면 새로고침 버튼 비활성화
+  document.getElementById('refreshBtn').disabled = tabState[currentTab].isLoading;
+}
+
+// 탭 결과 표시 (로딩 상태 포함)
+function displayTabResult(tab) {
+  const state = tabState[tab];
+  const resultDiv = document.getElementById('result');
+  const copyBtn = document.getElementById('copyBtn');
+  const status = document.getElementById('status');
+
+  if (state.markdown) {
+    resultDiv.innerHTML = marked.parse(state.markdown);
+    addCodeCopyButtons();
+    resultDiv.style.display = 'block';
+    copyBtn.disabled = false;
+    if (state.usage && state.model) {
+      displayTokenInfo(state.usage, state.model);
+    } else {
+      document.getElementById('tokenInfo').style.display = 'none';
+    }
+  } else {
+    resultDiv.style.display = 'none';
+    resultDiv.innerHTML = '';
+    copyBtn.disabled = true;
+    document.getElementById('tokenInfo').style.display = 'none';
+  }
+
+  // 로딩 상태 표시
+  if (state.isLoading) {
+    status.textContent = tab === 'abstract' ? '⏳ 초록 요약 중...' : '⏳ 전문 분석 중...';
+  }
+}
+
+// 현재 탭의 마크다운 가져오기
+function getCurrentMarkdown() {
+  return tabState[currentTab].markdown;
 }
 
 // 프롬프트 템플릿 치환
@@ -622,11 +683,11 @@ function addCodeCopyButtons() {
 }
 
 // 결과 저장 (마지막 결과 + 히스토리)
-async function saveResult(markdown, paperData, usage, model) {
+async function saveResult(markdown, paperData, usage, model, tab) {
   try {
     // 마지막 결과 저장
     await chrome.storage.local.set({
-      lastResult: { markdown, paperData, usage, model, timestamp: Date.now() }
+      lastResult: { markdown, paperData, usage, model, tab, timestamp: Date.now() }
     });
 
     // 히스토리에 추가
@@ -638,6 +699,7 @@ async function saveResult(markdown, paperData, usage, model) {
       markdown,
       usage,
       model,
+      tab,
       provider: currentSettings.provider,
       timestamp: Date.now()
     };
@@ -668,10 +730,13 @@ async function renderHistoryModal() {
     return;
   }
 
-  historyList.innerHTML = history.map(item => `
+  historyList.innerHTML = history.map(item => {
+    const tabLabel = item.tab === 'full' ? '📚 전문' : '📝 초록';
+    return `
     <div class="history-item" data-id="${item.id}">
       <div class="history-item-title">${item.title}</div>
       <div class="history-item-meta">
+        <span class="history-tab-badge ${item.tab || 'abstract'}">${tabLabel}</span>
         <span>${item.provider.toUpperCase()}</span>
         <span>${new Date(item.timestamp).toLocaleDateString('ko-KR')}</span>
       </div>
@@ -680,7 +745,7 @@ async function renderHistoryModal() {
         <button class="btn-danger delete-btn" data-id="${item.id}">삭제</button>
       </div>
     </div>
-  `).join('');
+  `}).join('');
 
   // 이벤트 리스너 추가
   historyList.querySelectorAll('.load-btn').forEach(btn => {
@@ -689,20 +754,15 @@ async function renderHistoryModal() {
       const id = parseInt(btn.dataset.id);
       const item = history.find(h => h.id === id);
       if (item) {
-        rawMarkdown = item.markdown;
-        lastUsage = item.usage;
-        const resultDiv = document.getElementById('result');
-        const copyBtn = document.getElementById('copyBtn');
-        resultDiv.innerHTML = marked.parse(rawMarkdown);
-        addCodeCopyButtons();
-        resultDiv.style.display = 'block';
-        copyBtn.style.display = 'block';
+        const tab = item.tab || 'abstract';
+        tabState[tab].markdown = item.markdown;
+        tabState[tab].usage = item.usage;
+        tabState[tab].model = item.model;
+        tabState[tab].paperData = { title: item.title, url: item.url };
+        currentTab = tab;
+        updateTabUI();
+        displayTabResult(tab);
         document.getElementById('status').textContent = '📝 히스토리에서 불러옴';
-        if (lastUsage && item.model) {
-          displayTokenInfo(lastUsage, item.model);
-        } else {
-          document.getElementById('tokenInfo').style.display = 'none';
-        }
         closeHistoryModal();
       }
     });
@@ -730,34 +790,39 @@ function closeHistoryModal() {
   document.getElementById('historyModal').classList.remove('active');
 }
 
-// 메인 요약 요청 처리
-document.getElementById('send').addEventListener('click', async () => {
+// 초록 요약 분석 실행
+async function runAbstractAnalysis() {
+  const TAB = 'abstract';
   const status = document.getElementById('status');
   const result = document.getElementById('result');
   const copyBtn = document.getElementById('copyBtn');
-  const sendBtn = document.getElementById('send');
   const tokenInfo = document.getElementById('tokenInfo');
 
   await loadSettings();
 
-  status.textContent = '⏳ 파싱 중...';
-  result.style.display = 'none';
-  copyBtn.style.display = 'none';
-  tokenInfo.style.display = 'none';
-  sendBtn.disabled = true;
-  rawMarkdown = '';
-  lastUsage = null;
+  // 로딩 상태 설정
+  tabState[TAB].isLoading = true;
+  updateTabUI();
 
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  // 현재 탭이면 UI 초기화
+  if (currentTab === TAB) {
+    status.textContent = '⏳ 파싱 중...';
+    result.style.display = 'none';
+    copyBtn.disabled = true;
+    tokenInfo.style.display = 'none';
+  }
 
-  if (!tab.url.includes('arxiv.org')) {
-    status.textContent = '❌ arXiv 페이지에서 실행해주세요.';
-    sendBtn.disabled = false;
+  const [browserTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+
+  if (!browserTab.url.includes('arxiv.org')) {
+    if (currentTab === TAB) status.textContent = '❌ arXiv 페이지에서 실행해주세요.';
+    tabState[TAB].isLoading = false;
+    updateTabUI();
     return;
   }
 
   const [extracted] = await chrome.scripting.executeScript({
-    target: { tabId: tab.id },
+    target: { tabId: browserTab.id },
     func: () => {
       const title = document.querySelector('h1.title')?.textContent?.replace('Title:', '').trim();
       const abstract = document.querySelector('blockquote.abstract')?.textContent?.replace('Abstract:', '').trim();
@@ -769,22 +834,28 @@ document.getElementById('send').addEventListener('click', async () => {
   const data = extracted.result;
 
   if (!data.title) {
-    status.textContent = '❌ 논문 정보를 찾을 수 없습니다.';
-    sendBtn.disabled = false;
+    if (currentTab === TAB) status.textContent = '❌ 논문 정보를 찾을 수 없습니다.';
+    tabState[TAB].isLoading = false;
+    updateTabUI();
     return;
   }
 
   const providerLabels = { n8n: 'n8n', claude: 'Claude', openai: 'OpenAI' };
-  status.textContent = `⏳ ${providerLabels[currentSettings.provider]} 요청 중...`;
+  if (currentTab === TAB) {
+    status.textContent = `⏳ ${providerLabels[currentSettings.provider]} 요청 중...`;
+  }
 
   try {
     let response;
     let model;
 
     const onChunk = (text) => {
-      rawMarkdown = text;
-      result.style.display = 'block';
-      result.innerHTML = marked.parse(text);
+      tabState[TAB].markdown = text;
+      // 현재 탭이 abstract일 때만 UI 업데이트
+      if (currentTab === TAB) {
+        result.style.display = 'block';
+        result.innerHTML = marked.parse(text);
+      }
     };
 
     switch (currentSettings.provider) {
@@ -800,70 +871,80 @@ document.getElementById('send').addEventListener('click', async () => {
       default:
         model = null;
         response = await callN8n(data);
-        rawMarkdown = response.text;
-        result.innerHTML = marked.parse(rawMarkdown);
-        result.style.display = 'block';
+        tabState[TAB].markdown = response.text;
+        if (currentTab === TAB) {
+          result.innerHTML = marked.parse(response.text);
+          result.style.display = 'block';
+        }
         break;
     }
 
-    lastUsage = response.usage;
+    // 상태 저장
+    tabState[TAB].usage = response.usage;
+    tabState[TAB].model = model;
+    tabState[TAB].paperData = data;
 
-    status.textContent = '✅ 완료!';
-    copyBtn.style.display = 'block';
-    addCodeCopyButtons();
-
-    if (lastUsage && model) {
-      displayTokenInfo(lastUsage, model);
+    // 현재 탭이면 UI 업데이트
+    if (currentTab === TAB) {
+      status.textContent = '✅ 완료!';
+      copyBtn.disabled = false;
+      addCodeCopyButtons();
+      if (response.usage && model) {
+        displayTokenInfo(response.usage, model);
+      }
     }
 
-    await saveResult(rawMarkdown, data, lastUsage, model);
+    await saveResult(tabState[TAB].markdown, data, response.usage, model, TAB);
 
   } catch (e) {
-    status.textContent = '❌ 요청 실패: ' + e.message;
+    if (currentTab === TAB) status.textContent = '❌ 요청 실패: ' + e.message;
   } finally {
-    sendBtn.disabled = false;
+    tabState[TAB].isLoading = false;
+    updateTabUI();
   }
-});
+}
 
-// 전문 분석 요청 처리
-document.getElementById('sendFull').addEventListener('click', async () => {
+// 전문 분석 실행
+async function runFullAnalysis() {
+  const TAB = 'full';
   const status = document.getElementById('status');
   const result = document.getElementById('result');
   const copyBtn = document.getElementById('copyBtn');
-  const sendBtn = document.getElementById('send');
-  const sendFullBtn = document.getElementById('sendFull');
   const tokenInfo = document.getElementById('tokenInfo');
 
   await loadSettings();
 
   // n8n은 전문 분석 미지원
   if (currentSettings.provider === 'n8n') {
-    status.textContent = '❌ 전문 분석은 Claude 또는 OpenAI에서만 사용 가능합니다.';
+    if (currentTab === TAB) status.textContent = '❌ 전문 분석은 Claude 또는 OpenAI에서만 사용 가능합니다.';
     return;
   }
 
-  status.textContent = '⏳ 논문 HTML 가져오는 중...';
-  result.style.display = 'none';
-  copyBtn.style.display = 'none';
-  tokenInfo.style.display = 'none';
-  sendBtn.disabled = true;
-  sendFullBtn.disabled = true;
-  rawMarkdown = '';
-  lastUsage = null;
+  // 로딩 상태 설정
+  tabState[TAB].isLoading = true;
+  updateTabUI();
 
-  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  // 현재 탭이면 UI 초기화
+  if (currentTab === TAB) {
+    status.textContent = '⏳ 논문 HTML 가져오는 중...';
+    result.style.display = 'none';
+    copyBtn.disabled = true;
+    tokenInfo.style.display = 'none';
+  }
 
-  if (!tab.url.includes('arxiv.org')) {
-    status.textContent = '❌ arXiv 페이지에서 실행해주세요.';
-    sendBtn.disabled = false;
-    sendFullBtn.disabled = false;
+  const [browserTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+
+  if (!browserTab.url.includes('arxiv.org')) {
+    if (currentTab === TAB) status.textContent = '❌ arXiv 페이지에서 실행해주세요.';
+    tabState[TAB].isLoading = false;
+    updateTabUI();
     return;
   }
 
   try {
     // 기본 정보 추출
     const [extracted] = await chrome.scripting.executeScript({
-      target: { tabId: tab.id },
+      target: { tabId: browserTab.id },
       func: () => {
         const title = document.querySelector('h1.title')?.textContent?.replace('Title:', '').trim();
         const url = window.location.href;
@@ -874,14 +955,14 @@ document.getElementById('sendFull').addEventListener('click', async () => {
     const basicData = extracted.result;
 
     if (!basicData.title) {
-      status.textContent = '❌ 논문 정보를 찾을 수 없습니다.';
-      sendBtn.disabled = false;
-      sendFullBtn.disabled = false;
+      if (currentTab === TAB) status.textContent = '❌ 논문 정보를 찾을 수 없습니다.';
+      tabState[TAB].isLoading = false;
+      updateTabUI();
       return;
     }
 
     // HTML에서 전문 가져오기
-    status.textContent = '⏳ 논문 전문 파싱 중...';
+    if (currentTab === TAB) status.textContent = '⏳ 논문 전문 파싱 중...';
     const fullText = await fetchArxivFullText(basicData.url);
 
     const data = {
@@ -892,15 +973,20 @@ document.getElementById('sendFull').addEventListener('click', async () => {
 
     const charCount = fullText.length.toLocaleString();
     const providerLabels = { claude: 'Claude', openai: 'OpenAI' };
-    status.textContent = `⏳ ${providerLabels[currentSettings.provider]} 전문 분석 중... (${charCount}자)`;
+    if (currentTab === TAB) {
+      status.textContent = `⏳ ${providerLabels[currentSettings.provider]} 전문 분석 중... (${charCount}자)`;
+    }
 
     let response;
     let model;
 
     const onChunk = (text) => {
-      rawMarkdown = text;
-      result.style.display = 'block';
-      result.innerHTML = marked.parse(text);
+      tabState[TAB].markdown = text;
+      // 현재 탭이 full일 때만 UI 업데이트
+      if (currentTab === TAB) {
+        result.style.display = 'block';
+        result.innerHTML = marked.parse(text);
+      }
     };
 
     switch (currentSettings.provider) {
@@ -914,31 +1000,73 @@ document.getElementById('sendFull').addEventListener('click', async () => {
         break;
     }
 
-    lastUsage = response.usage;
+    // 상태 저장
+    tabState[TAB].usage = response.usage;
+    tabState[TAB].model = model;
+    tabState[TAB].paperData = { title: data.title, url: data.url, abstract: '[전문 분석]' };
 
-    status.textContent = '✅ 전문 분석 완료!';
-    copyBtn.style.display = 'block';
-    addCodeCopyButtons();
-
-    if (lastUsage && model) {
-      displayTokenInfo(lastUsage, model);
+    // 현재 탭이면 UI 업데이트
+    if (currentTab === TAB) {
+      status.textContent = '✅ 전문 분석 완료!';
+      copyBtn.disabled = false;
+      addCodeCopyButtons();
+      if (response.usage && model) {
+        displayTokenInfo(response.usage, model);
+      }
     }
 
-    await saveResult(rawMarkdown, { title: data.title, url: data.url, abstract: '[전문 분석]' }, lastUsage, model);
+    await saveResult(tabState[TAB].markdown, tabState[TAB].paperData, response.usage, model, TAB);
 
   } catch (e) {
-    status.textContent = '❌ 오류: ' + e.message;
+    if (currentTab === TAB) status.textContent = '❌ 오류: ' + e.message;
   } finally {
-    sendBtn.disabled = false;
-    sendFullBtn.disabled = false;
+    tabState[TAB].isLoading = false;
+    updateTabUI();
   }
-});
+}
+
+// 탭 클릭 핸들러
+function handleTabClick(tab) {
+  if (currentTab === tab) return; // 같은 탭 클릭 무시
+
+  currentTab = tab;
+  updateTabUI();
+  displayTabResult(tab);
+
+  // 결과가 없고 로딩 중이 아니면 분석 실행
+  if (!tabState[tab].markdown && !tabState[tab].isLoading) {
+    if (tab === 'abstract') {
+      runAbstractAnalysis();
+    } else {
+      runFullAnalysis();
+    }
+  } else if (tabState[tab].markdown) {
+    document.getElementById('status').textContent = tab === 'abstract' ? '📝 초록 요약' : '📚 전문 분석';
+  }
+}
+
+// 새로고침 (강제 재분석)
+function handleRefresh() {
+  // 현재 탭이 로딩 중이면 무시
+  if (tabState[currentTab].isLoading) return;
+
+  if (currentTab === 'abstract') {
+    runAbstractAnalysis();
+  } else {
+    runFullAnalysis();
+  }
+}
+
+// 탭 버튼 이벤트
+document.getElementById('tabAbstract').addEventListener('click', () => handleTabClick('abstract'));
+document.getElementById('tabFull').addEventListener('click', () => handleTabClick('full'));
+document.getElementById('refreshBtn').addEventListener('click', handleRefresh);
 
 // 마크다운 복사 버튼
 document.getElementById('copyBtn').addEventListener('click', async () => {
   const copyBtn = document.getElementById('copyBtn');
   try {
-    await navigator.clipboard.writeText(rawMarkdown);
+    await navigator.clipboard.writeText(getCurrentMarkdown());
     copyBtn.textContent = '✅ 복사됨!';
     setTimeout(() => { copyBtn.textContent = '📋 마크다운 복사'; }, 2000);
   } catch (e) {
@@ -975,8 +1103,10 @@ chrome.storage.onChanged.addListener((changes) => {
 // 컨텍스트 메뉴에서 메시지 수신 처리
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === 'startSummarize') {
-    // 요약 버튼 클릭 트리거
-    document.getElementById('send').click();
+    // 초록 요약 탭으로 전환하고 분석 실행
+    currentTab = 'abstract';
+    updateTabUI();
+    runAbstractAnalysis();
   }
 });
 
