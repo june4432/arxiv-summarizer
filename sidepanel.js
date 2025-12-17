@@ -161,7 +161,7 @@ function applyTheme(isDark) {
   document.documentElement.setAttribute('data-theme', isDark ? 'dark' : 'light');
 }
 
-// 설정 불러오기
+// 설정 불러오기 (설정만, 결과 복원 X)
 async function loadSettings() {
   try {
     const syncData = await chrome.storage.sync.get([
@@ -170,7 +170,7 @@ async function loadSettings() {
     ]);
 
     const localData = await chrome.storage.local.get([
-      'claudeApiKey', 'openaiApiKey', 'lastResult'
+      'claudeApiKey', 'openaiApiKey'
     ]);
 
     currentSettings = {
@@ -187,14 +187,21 @@ async function loadSettings() {
 
     applyTheme(currentSettings.darkMode);
     updateProviderBadge(currentSettings.provider);
+  } catch (e) {
+    console.error('설정 불러오기 실패:', e);
+  }
+}
 
-    // 마지막 결과 복원
-    if (localData.lastResult) {
-      const lastTab = localData.lastResult.tab || 'abstract';
-      tabState[lastTab].markdown = localData.lastResult.markdown || '';
-      tabState[lastTab].usage = localData.lastResult.usage || null;
-      tabState[lastTab].model = localData.lastResult.model || null;
-      tabState[lastTab].paperData = localData.lastResult.paperData || null;
+// 초기화 시 마지막 결과 복원
+async function restoreLastResult() {
+  try {
+    const { lastResult } = await chrome.storage.local.get('lastResult');
+    if (lastResult) {
+      const lastTab = lastResult.tab || 'abstract';
+      tabState[lastTab].markdown = lastResult.markdown || '';
+      tabState[lastTab].usage = lastResult.usage || null;
+      tabState[lastTab].model = lastResult.model || null;
+      tabState[lastTab].paperData = lastResult.paperData || null;
 
       if (tabState[lastTab].markdown) {
         currentTab = lastTab;
@@ -204,7 +211,7 @@ async function loadSettings() {
       }
     }
   } catch (e) {
-    console.error('설정 불러오기 실패:', e);
+    console.error('결과 복원 실패:', e);
   }
 }
 
@@ -1222,4 +1229,7 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
 });
 
 // 초기화
-document.addEventListener('DOMContentLoaded', loadSettings);
+document.addEventListener('DOMContentLoaded', async () => {
+  await loadSettings();
+  await restoreLastResult();
+});
