@@ -222,8 +222,8 @@ function updateTabUI() {
     btn.classList.toggle('active', tab === currentTab);
     btn.classList.toggle('loading', tabState[tab].isLoading);
   });
-  // 현재 탭이 로딩 중이면 새로고침 버튼 비활성화
-  document.getElementById('refreshBtn').disabled = tabState[currentTab].isLoading;
+  // 현재 탭이 로딩 중이면 시작 버튼 비활성화
+  document.getElementById('startBtn').disabled = tabState[currentTab].isLoading;
 }
 
 // 탭 결과 표시 (로딩 상태 포함)
@@ -231,6 +231,7 @@ function displayTabResult(tab) {
   const state = tabState[tab];
   const resultDiv = document.getElementById('result');
   const copyBtn = document.getElementById('copyBtn');
+  const viewPaperBtn = document.getElementById('viewPaperBtn');
   const status = document.getElementById('status');
 
   if (state.markdown) {
@@ -250,6 +251,9 @@ function displayTabResult(tab) {
     document.getElementById('tokenInfo').style.display = 'none';
   }
 
+  // 논문 보기 버튼 활성화 (paperData가 있으면)
+  viewPaperBtn.disabled = !state.paperData?.url;
+
   // 로딩 상태 표시
   if (state.isLoading) {
     status.textContent = tab === 'abstract' ? '⏳ 초록 요약 중...' : '⏳ 전문 분석 중...';
@@ -259,6 +263,43 @@ function displayTabResult(tab) {
 // 현재 탭의 마크다운 가져오기
 function getCurrentMarkdown() {
   return tabState[currentTab].markdown;
+}
+
+// URL에서 arXiv 논문 ID 추출
+function extractPaperId(url) {
+  if (!url) return null;
+  const match = url.match(/arxiv\.org\/(?:abs|html|pdf)\/([^\/?#]+)/);
+  return match ? match[1] : null;
+}
+
+// 현재 탭에 맞는 논문 URL 가져오기
+function getPaperUrl() {
+  const state = tabState[currentTab];
+  if (!state.paperData?.url) return null;
+
+  const paperId = extractPaperId(state.paperData.url);
+  if (!paperId) return state.paperData.url;
+
+  // 전문 분석 탭이면 html URL, 아니면 abs URL
+  if (currentTab === 'full') {
+    return `https://arxiv.org/html/${paperId}`;
+  }
+  return `https://arxiv.org/abs/${paperId}`;
+}
+
+// 현재 브라우저 탭의 논문에 대한 히스토리 찾기
+async function loadHistoryForCurrentPage(tab) {
+  const [browserTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  if (!browserTab?.url?.includes('arxiv.org')) return null;
+
+  const currentPaperId = extractPaperId(browserTab.url);
+  if (!currentPaperId) return null;
+
+  const history = await loadHistory();
+  return history.find(item => {
+    const itemPaperId = extractPaperId(item.url);
+    return itemPaperId === currentPaperId && (item.tab || 'abstract') === tab;
+  });
 }
 
 // 프롬프트 템플릿 치환
@@ -692,6 +733,12 @@ async function saveResult(markdown, paperData, usage, model, tab) {
 
     // 히스토리에 추가
     const { history = [] } = await chrome.storage.local.get('history');
+
+    // 같은 논문 + 같은 탭이면 기존 항목 제거
+    const filteredHistory = history.filter(item =>
+      !(item.url === paperData.url && (item.tab || 'abstract') === tab)
+    );
+
     const newEntry = {
       id: Date.now(),
       title: paperData.title,
@@ -705,10 +752,10 @@ async function saveResult(markdown, paperData, usage, model, tab) {
     };
 
     // 최대 50개까지만 저장
-    history.unshift(newEntry);
-    if (history.length > 50) history.pop();
+    filteredHistory.unshift(newEntry);
+    if (filteredHistory.length > 50) filteredHistory.pop();
 
-    await chrome.storage.local.set({ history });
+    await chrome.storage.local.set({ history: filteredHistory });
   } catch (e) {
     console.error('결과 저장 실패:', e);
   }
@@ -720,13 +767,24 @@ async function loadHistory() {
   return history;
 }
 
+// 현재 히스토리 필터
+let historyFilter = 'all';
+
 // 히스토리 모달 렌더링
 async function renderHistoryModal() {
   const historyList = document.getElementById('historyList');
-  const history = await loadHistory();
+  const allHistory = await loadHistory();
+
+  // 필터 적용
+  const history = historyFilter === 'all'
+    ? allHistory
+    : allHistory.filter(item => (item.tab || 'abstract') === historyFilter);
 
   if (history.length === 0) {
-    historyList.innerHTML = '<div class="history-empty">아직 요약한 논문이 없습니다</div>';
+    const emptyMsg = historyFilter === 'all'
+      ? '아직 요약한 논문이 없습니다'
+      : `${historyFilter === 'full' ? '전문 분석' : '초록 요약'} 히스토리가 없습니다`;
+    historyList.innerHTML = `<div class="history-empty">${emptyMsg}</div>`;
     return;
   }
 
@@ -736,7 +794,7 @@ async function renderHistoryModal() {
     <div class="history-item" data-id="${item.id}">
       <div class="history-item-title">${item.title}</div>
       <div class="history-item-meta">
-        <span class="history-tab-badge ${item.tab || 'abstract'}">${tabLabel}</span>
+        <span class="history-type-badge ${item.tab || 'abstract'}">${tabLabel}</span>
         <span>${item.provider.toUpperCase()}</span>
         <span>${new Date(item.timestamp).toLocaleDateString('ko-KR')}</span>
       </div>
@@ -752,7 +810,7 @@ async function renderHistoryModal() {
     btn.addEventListener('click', async (e) => {
       e.stopPropagation();
       const id = parseInt(btn.dataset.id);
-      const item = history.find(h => h.id === id);
+      const item = allHistory.find(h => h.id === id);
       if (item) {
         const tab = item.tab || 'abstract';
         tabState[tab].markdown = item.markdown;
@@ -783,11 +841,29 @@ async function renderHistoryModal() {
 // 히스토리 모달 열기/닫기
 function openHistoryModal() {
   document.getElementById('historyModal').classList.add('active');
+  document.body.style.overflow = 'hidden'; // 배경 스크롤 막기
+  historyFilter = 'all';
+  updateHistoryTabUI();
   renderHistoryModal();
 }
 
 function closeHistoryModal() {
   document.getElementById('historyModal').classList.remove('active');
+  document.body.style.overflow = ''; // 배경 스크롤 복원
+}
+
+// 히스토리 탭 UI 업데이트
+function updateHistoryTabUI() {
+  document.querySelectorAll('.history-tab').forEach(tab => {
+    tab.classList.toggle('active', tab.dataset.filter === historyFilter);
+  });
+}
+
+// 히스토리 탭 클릭 핸들러
+function handleHistoryTabClick(filter) {
+  historyFilter = filter;
+  updateHistoryTabUI();
+  renderHistoryModal();
 }
 
 // 초록 요약 분석 실행
@@ -1025,28 +1101,38 @@ async function runFullAnalysis() {
   }
 }
 
-// 탭 클릭 핸들러
-function handleTabClick(tab) {
+// 탭 클릭 핸들러 (결과 보기만, 자동 분석 X)
+async function handleTabClick(tab) {
   if (currentTab === tab) return; // 같은 탭 클릭 무시
 
   currentTab = tab;
   updateTabUI();
+
+  // 현재 탭에 결과가 없으면 히스토리에서 현재 페이지 논문 찾기
+  if (!tabState[tab].markdown && !tabState[tab].isLoading) {
+    const historyItem = await loadHistoryForCurrentPage(tab);
+    if (historyItem) {
+      tabState[tab].markdown = historyItem.markdown;
+      tabState[tab].usage = historyItem.usage;
+      tabState[tab].model = historyItem.model;
+      tabState[tab].paperData = { title: historyItem.title, url: historyItem.url };
+    }
+  }
+
   displayTabResult(tab);
 
-  // 결과가 없고 로딩 중이 아니면 분석 실행
-  if (!tabState[tab].markdown && !tabState[tab].isLoading) {
-    if (tab === 'abstract') {
-      runAbstractAnalysis();
-    } else {
-      runFullAnalysis();
-    }
+  // 상태 메시지 업데이트
+  if (tabState[tab].isLoading) {
+    document.getElementById('status').textContent = tab === 'abstract' ? '⏳ 초록 요약 중...' : '⏳ 전문 분석 중...';
   } else if (tabState[tab].markdown) {
     document.getElementById('status').textContent = tab === 'abstract' ? '📝 초록 요약' : '📚 전문 분석';
+  } else {
+    document.getElementById('status').textContent = '▶️ 버튼을 눌러 분석을 시작하세요';
   }
 }
 
-// 새로고침 (강제 재분석)
-function handleRefresh() {
+// 분석 시작
+function handleStartAnalysis() {
   // 현재 탭이 로딩 중이면 무시
   if (tabState[currentTab].isLoading) return;
 
@@ -1060,7 +1146,7 @@ function handleRefresh() {
 // 탭 버튼 이벤트
 document.getElementById('tabAbstract').addEventListener('click', () => handleTabClick('abstract'));
 document.getElementById('tabFull').addEventListener('click', () => handleTabClick('full'));
-document.getElementById('refreshBtn').addEventListener('click', handleRefresh);
+document.getElementById('startBtn').addEventListener('click', handleStartAnalysis);
 
 // 마크다운 복사 버튼
 document.getElementById('copyBtn').addEventListener('click', async () => {
@@ -1068,9 +1154,17 @@ document.getElementById('copyBtn').addEventListener('click', async () => {
   try {
     await navigator.clipboard.writeText(getCurrentMarkdown());
     copyBtn.textContent = '✅ 복사됨!';
-    setTimeout(() => { copyBtn.textContent = '📋 마크다운 복사'; }, 2000);
+    setTimeout(() => { copyBtn.textContent = '📋 복사'; }, 2000);
   } catch (e) {
-    copyBtn.textContent = '❌ 복사 실패';
+    copyBtn.textContent = '❌ 실패';
+  }
+});
+
+// 논문 보기 버튼
+document.getElementById('viewPaperBtn').addEventListener('click', () => {
+  const url = getPaperUrl();
+  if (url) {
+    chrome.tabs.create({ url });
   }
 });
 
@@ -1084,6 +1178,11 @@ document.getElementById('historyBtn').addEventListener('click', openHistoryModal
 document.getElementById('closeHistory').addEventListener('click', closeHistoryModal);
 document.getElementById('historyModal').addEventListener('click', (e) => {
   if (e.target.id === 'historyModal') closeHistoryModal();
+});
+
+// 히스토리 탭 필터
+document.querySelectorAll('.history-tab').forEach(tab => {
+  tab.addEventListener('click', () => handleHistoryTabClick(tab.dataset.filter));
 });
 
 // 전체 히스토리 삭제
