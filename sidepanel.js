@@ -1221,12 +1221,30 @@ chrome.storage.onChanged.addListener((changes) => {
 // 컨텍스트 메뉴에서 메시지 수신 처리
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.action === 'startSummarize') {
-    // 초록 요약 탭으로 전환하고 분석 실행
-    currentTab = 'abstract';
-    updateTabUI();
-    runAbstractAnalysis();
+    handleContextMenuSummarize();
   }
 });
+
+// 컨텍스트 메뉴 요약 처리
+async function handleContextMenuSummarize() {
+  currentTab = 'abstract';
+  updateTabUI();
+
+  // 히스토리에서 현재 논문 찾기
+  const historyItem = await loadHistoryForCurrentPage('abstract');
+  if (historyItem) {
+    // 히스토리에 있으면 불러오기
+    tabState.abstract.markdown = historyItem.markdown;
+    tabState.abstract.usage = historyItem.usage;
+    tabState.abstract.model = historyItem.model;
+    tabState.abstract.paperData = { title: historyItem.title, url: historyItem.url };
+    displayTabResult('abstract');
+    document.getElementById('status').textContent = '📝 저장된 초록 요약';
+  } else {
+    // 없으면 새로 분석
+    runAbstractAnalysis();
+  }
+}
 
 // 초기화
 document.addEventListener('DOMContentLoaded', async () => {
