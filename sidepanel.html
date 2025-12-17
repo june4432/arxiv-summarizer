@@ -342,6 +342,28 @@
       color: var(--text-secondary);
       font-size: 12px;
     }
+
+    /* 버튼 그룹 */
+    .btn-group {
+      display: flex;
+      gap: 8px;
+      margin-bottom: 10px;
+    }
+
+    .btn-group button {
+      flex: 1;
+      margin: 0;
+    }
+
+    .btn-primary {
+      background: var(--primary) !important;
+      color: white !important;
+      border: none !important;
+    }
+
+    .btn-primary:hover {
+      background: var(--primary-hover) !important;
+    }
   </style>
 </head>
 <body>
@@ -356,7 +378,10 @@
     </div>
   </div>
 
-  <button id="send">논문 요약 요청</button>
+  <div class="btn-group">
+    <button id="send">📝 초록 요약</button>
+    <button id="sendFull" class="btn-primary">📚 전문 분석</button>
+  </div>
   <button id="copyBtn">📋 마크다운 복사</button>
   <p id="status"></p>
   <div id="tokenInfo"></div>

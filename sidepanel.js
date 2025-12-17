@@ -65,6 +65,66 @@ const LANGUAGE_MAP = {
   auto: '원문 언어'
 };
 
+// 전문 분석용 프롬프트
+const FULL_ANALYSIS_PROMPT = `당신은 AI/ML 분야 논문을 심층 분석하는 전문가입니다.
+
+## 역할
+- 논문 전문을 읽고 깊이 있는 분석 제공
+- 핵심 기여점, 방법론, 실험 결과를 상세히 설명
+- 기술적 깊이와 접근성의 균형 유지
+
+## 분석 구조
+
+### 1. 핵심 요약 (Executive Summary)
+논문의 핵심을 3-5문장으로 압축
+
+### 2. 연구 배경 및 동기
+- 이 연구가 필요한 이유
+- 기존 연구의 한계점
+- 연구 질문 또는 가설
+
+### 3. 제안 방법론 (상세)
+- 전체 아키텍처/프레임워크 설명
+- 핵심 알고리즘 및 수식 (있다면 직관적 설명과 함께)
+- 기존 방법과의 차별점
+- 구현 세부사항 (학습 방법, 하이퍼파라미터 등)
+
+### 4. 실험 설계 및 결과
+- 데이터셋 및 평가 지표
+- 주요 실험 결과 (수치 포함)
+- Baseline 대비 성능 비교
+- Ablation study 결과 및 인사이트
+
+### 5. 주요 Figure/Table 분석
+논문의 핵심 Figure나 Table에서 얻을 수 있는 인사이트
+
+### 6. 강점 및 한계
+- 이 연구의 주요 강점
+- 한계점 및 개선 가능한 부분
+- 저자가 언급한 future work
+
+### 7. 실용적 시사점
+- 실제 적용 가능성
+- 재현 가능성 (코드 공개 여부 등)
+- 관련 후속 연구 방향
+
+### 8. 핵심 키워드
+관련 기술 태그 5-7개
+
+## 응답 지침
+- {{language}}로 응답해주세요
+- 전문 용어는 처음 등장 시 간단히 설명
+- 수식은 직관적 설명과 함께 제공
+- 논문의 주장을 그대로 전달하되, 명백한 과장은 지적
+- 가능하면 구체적인 수치와 함께 설명
+
+## 논문 정보
+- 제목: {{title}}
+- URL: {{url}}
+
+## 논문 전문
+{{fullText}}`;
+
 // 모델별 가격 (1M 토큰당 USD)
 const PRICING = {
   // Claude
@@ -332,6 +392,199 @@ async function callOpenAIStream(data, onChunk) {
   return { text: fullText, usage };
 }
 
+// arXiv HTML 페이지에서 전문 가져오기
+async function fetchArxivFullText(arxivUrl) {
+  // abs URL에서 논문 ID 추출
+  const match = arxivUrl.match(/arxiv\.org\/abs\/([^\/?#]+)/);
+  if (!match) {
+    throw new Error('arXiv 논문 ID를 찾을 수 없습니다.');
+  }
+
+  const paperId = match[1];
+  const htmlUrl = `https://arxiv.org/html/${paperId}`;
+
+  const response = await fetch(htmlUrl);
+
+  if (!response.ok) {
+    if (response.status === 404) {
+      throw new Error('이 논문은 HTML 버전이 없습니다. 초록 요약을 이용해주세요.');
+    }
+    throw new Error(`HTML 페이지 로드 실패: ${response.status}`);
+  }
+
+  const html = await response.text();
+  const parser = new DOMParser();
+  const doc = parser.parseFromString(html, 'text/html');
+
+  // 본문 추출 (article 태그 또는 main 콘텐츠)
+  const article = doc.querySelector('article') || doc.querySelector('.ltx_document') || doc.querySelector('main');
+
+  if (!article) {
+    throw new Error('논문 본문을 찾을 수 없습니다.');
+  }
+
+  // 불필요한 요소 제거
+  article.querySelectorAll('script, style, nav, header, footer, .ltx_bibliography').forEach(el => el.remove());
+
+  // 텍스트 추출 및 정리
+  let text = article.innerText || article.textContent;
+
+  // 연속된 공백/줄바꿈 정리
+  text = text.replace(/\n{3,}/g, '\n\n').replace(/[ \t]+/g, ' ').trim();
+
+  // 너무 길면 잘라내기 (약 100K 토큰 = 약 400K 문자 제한)
+  const maxLength = 400000;
+  if (text.length > maxLength) {
+    text = text.substring(0, maxLength) + '\n\n[... 이하 생략됨 ...]';
+  }
+
+  return text;
+}
+
+// 전문 분석용 프롬프트 빌드
+function buildFullAnalysisPrompt(data) {
+  const language = LANGUAGE_MAP[currentSettings.summaryLanguage] || '한국어';
+  return FULL_ANALYSIS_PROMPT
+    .replace(/\{\{title\}\}/g, data.title)
+    .replace(/\{\{url\}\}/g, data.url)
+    .replace(/\{\{fullText\}\}/g, data.fullText)
+    .replace(/\{\{language\}\}/g, language);
+}
+
+// Claude API 전문 분석 스트리밍 호출
+async function callClaudeFullAnalysis(data, onChunk) {
+  if (!currentSettings.claudeApiKey) {
+    throw new Error('Claude API Key가 설정되지 않았습니다. 설정 페이지에서 입력해주세요.');
+  }
+
+  const prompt = buildFullAnalysisPrompt(data);
+
+  const response = await fetch('https://api.anthropic.com/v1/messages', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': currentSettings.claudeApiKey,
+      'anthropic-version': '2023-06-01',
+      'anthropic-dangerous-direct-browser-access': 'true'
+    },
+    body: JSON.stringify({
+      model: currentSettings.claudeModel,
+      max_tokens: 8192,
+      stream: true,
+      messages: [{ role: 'user', content: prompt }]
+    })
+  });
+
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.error?.message || 'Claude API 오류');
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let fullText = '';
+  let usage = { input_tokens: 0, output_tokens: 0 };
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    const chunk = decoder.decode(value);
+    const lines = chunk.split('\n');
+
+    for (const line of lines) {
+      if (line.startsWith('data: ')) {
+        const jsonStr = line.slice(6);
+        if (jsonStr === '[DONE]') continue;
+
+        try {
+          const parsed = JSON.parse(jsonStr);
+
+          if (parsed.type === 'content_block_delta' && parsed.delta?.text) {
+            fullText += parsed.delta.text;
+            onChunk(fullText);
+          }
+
+          if (parsed.type === 'message_delta' && parsed.usage) {
+            usage.output_tokens = parsed.usage.output_tokens;
+          }
+
+          if (parsed.type === 'message_start' && parsed.message?.usage) {
+            usage.input_tokens = parsed.message.usage.input_tokens;
+          }
+        } catch (e) {}
+      }
+    }
+  }
+
+  return { text: fullText, usage };
+}
+
+// OpenAI API 전문 분석 스트리밍 호출
+async function callOpenAIFullAnalysis(data, onChunk) {
+  if (!currentSettings.openaiApiKey) {
+    throw new Error('OpenAI API Key가 설정되지 않았습니다. 설정 페이지에서 입력해주세요.');
+  }
+
+  const prompt = buildFullAnalysisPrompt(data);
+
+  const response = await fetch('https://api.openai.com/v1/chat/completions', {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${currentSettings.openaiApiKey}`
+    },
+    body: JSON.stringify({
+      model: currentSettings.openaiModel,
+      messages: [{ role: 'user', content: prompt }],
+      max_tokens: 8192,
+      stream: true,
+      stream_options: { include_usage: true }
+    })
+  });
+
+  if (!response.ok) {
+    const error = await response.json();
+    throw new Error(error.error?.message || 'OpenAI API 오류');
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let fullText = '';
+  let usage = { input_tokens: 0, output_tokens: 0 };
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    const chunk = decoder.decode(value);
+    const lines = chunk.split('\n');
+
+    for (const line of lines) {
+      if (line.startsWith('data: ')) {
+        const jsonStr = line.slice(6);
+        if (jsonStr === '[DONE]') continue;
+
+        try {
+          const parsed = JSON.parse(jsonStr);
+
+          if (parsed.choices?.[0]?.delta?.content) {
+            fullText += parsed.choices[0].delta.content;
+            onChunk(fullText);
+          }
+
+          if (parsed.usage) {
+            usage.input_tokens = parsed.usage.prompt_tokens;
+            usage.output_tokens = parsed.usage.completion_tokens;
+          }
+        } catch (e) {}
+      }
+    }
+  }
+
+  return { text: fullText, usage };
+}
+
 // 코드 블럭에 복사 버튼 추가
 function addCodeCopyButtons() {
   const resultDiv = document.getElementById('result');
@@ -569,6 +822,115 @@ document.getElementById('send').addEventListener('click', async () => {
     status.textContent = '❌ 요청 실패: ' + e.message;
   } finally {
     sendBtn.disabled = false;
+  }
+});
+
+// 전문 분석 요청 처리
+document.getElementById('sendFull').addEventListener('click', async () => {
+  const status = document.getElementById('status');
+  const result = document.getElementById('result');
+  const copyBtn = document.getElementById('copyBtn');
+  const sendBtn = document.getElementById('send');
+  const sendFullBtn = document.getElementById('sendFull');
+  const tokenInfo = document.getElementById('tokenInfo');
+
+  await loadSettings();
+
+  // n8n은 전문 분석 미지원
+  if (currentSettings.provider === 'n8n') {
+    status.textContent = '❌ 전문 분석은 Claude 또는 OpenAI에서만 사용 가능합니다.';
+    return;
+  }
+
+  status.textContent = '⏳ 논문 HTML 가져오는 중...';
+  result.style.display = 'none';
+  copyBtn.style.display = 'none';
+  tokenInfo.style.display = 'none';
+  sendBtn.disabled = true;
+  sendFullBtn.disabled = true;
+  rawMarkdown = '';
+  lastUsage = null;
+
+  const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
+
+  if (!tab.url.includes('arxiv.org')) {
+    status.textContent = '❌ arXiv 페이지에서 실행해주세요.';
+    sendBtn.disabled = false;
+    sendFullBtn.disabled = false;
+    return;
+  }
+
+  try {
+    // 기본 정보 추출
+    const [extracted] = await chrome.scripting.executeScript({
+      target: { tabId: tab.id },
+      func: () => {
+        const title = document.querySelector('h1.title')?.textContent?.replace('Title:', '').trim();
+        const url = window.location.href;
+        return { title, url };
+      }
+    });
+
+    const basicData = extracted.result;
+
+    if (!basicData.title) {
+      status.textContent = '❌ 논문 정보를 찾을 수 없습니다.';
+      sendBtn.disabled = false;
+      sendFullBtn.disabled = false;
+      return;
+    }
+
+    // HTML에서 전문 가져오기
+    status.textContent = '⏳ 논문 전문 파싱 중...';
+    const fullText = await fetchArxivFullText(basicData.url);
+
+    const data = {
+      title: basicData.title,
+      url: basicData.url,
+      fullText
+    };
+
+    const charCount = fullText.length.toLocaleString();
+    const providerLabels = { claude: 'Claude', openai: 'OpenAI' };
+    status.textContent = `⏳ ${providerLabels[currentSettings.provider]} 전문 분석 중... (${charCount}자)`;
+
+    let response;
+    let model;
+
+    const onChunk = (text) => {
+      rawMarkdown = text;
+      result.style.display = 'block';
+      result.innerHTML = marked.parse(text);
+    };
+
+    switch (currentSettings.provider) {
+      case 'claude':
+        model = currentSettings.claudeModel;
+        response = await callClaudeFullAnalysis(data, onChunk);
+        break;
+      case 'openai':
+        model = currentSettings.openaiModel;
+        response = await callOpenAIFullAnalysis(data, onChunk);
+        break;
+    }
+
+    lastUsage = response.usage;
+
+    status.textContent = '✅ 전문 분석 완료!';
+    copyBtn.style.display = 'block';
+    addCodeCopyButtons();
+
+    if (lastUsage && model) {
+      displayTokenInfo(lastUsage, model);
+    }
+
+    await saveResult(rawMarkdown, { title: data.title, url: data.url, abstract: '[전문 분석]' }, lastUsage, model);
+
+  } catch (e) {
+    status.textContent = '❌ 오류: ' + e.message;
+  } finally {
+    sendBtn.disabled = false;
+    sendFullBtn.disabled = false;
   }
 });
 
