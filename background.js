@@ -36,18 +36,18 @@ chrome.contextMenus.onClicked.addListener(async (info, tab) => {
     }, 500);
   }
   else if (info.menuItemId === 'summarize-link') {
-    // 링크의 논문 요약
+    // 링크의 논문 요약 - 새 탭에서 열기
     const arxivUrl = info.linkUrl;
 
-    // 먼저 해당 탭을 arXiv 페이지로 이동
-    await chrome.tabs.update(tab.id, { url: arxivUrl });
+    // 새 탭에서 arXiv 페이지 열기
+    const newTab = await chrome.tabs.create({ url: arxivUrl });
 
     // 페이지 로딩 완료 대기 후 사이드패널 열고 요약 시작
     chrome.tabs.onUpdated.addListener(function listener(tabId, changeInfo) {
-      if (tabId === tab.id && changeInfo.status === 'complete') {
+      if (tabId === newTab.id && changeInfo.status === 'complete') {
         chrome.tabs.onUpdated.removeListener(listener);
 
-        chrome.sidePanel.open({ tabId: tab.id });
+        chrome.sidePanel.open({ tabId: newTab.id });
         setTimeout(() => {
           chrome.runtime.sendMessage({
             action: 'startSummarize',
