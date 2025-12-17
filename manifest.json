@@ -1,0 +1,17 @@
+{
+  "manifest_version": 3,
+  "name": "arXiv to n8n",
+  "version": "1.0",
+  "description": "arXiv 논문을 n8n으로 전송하고 요약받기",
+  "permissions": ["activeTab", "scripting", "sidePanel"],
+  "action": {
+    "default_icon": "icon.png"
+  },
+  "side_panel": {
+    "default_path": "sidepanel.html"
+  },
+  "background": {
+    "service_worker": "background.js"
+  },
+  "host_permissions": ["https://arxiv.org/*"]
+}
