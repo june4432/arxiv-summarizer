@@ -44,14 +44,20 @@
     /* App Layout */
     .app-header {
       display: flex;
-      justify-content: space-between;
-      align-items: center;
-      padding: 15px;
+      flex-direction: column;
+      gap: 12px;
+      padding: 12px 15px;
       border-bottom: 1px solid var(--border);
       background: var(--bg);
       position: sticky;
       top: 0;
       z-index: 10;
+    }
+
+    .header-top {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
     }
 
     .app-content {
@@ -476,7 +482,6 @@
       display: flex;
       align-items: center;
       gap: 8px;
-      margin-bottom: 10px;
     }
 
     .tab-group {
@@ -557,18 +562,16 @@
 <body>
   <!-- Header -->
   <header class="app-header">
-    <div class="header-left">
-      <h3>📄 arXiv Summarizer</h3>
-      <span id="providerBadge" class="provider-badge">n8n</span>
+    <div class="header-top">
+      <div class="header-left">
+        <h3>📄 arXiv Summarizer</h3>
+        <span id="providerBadge" class="provider-badge">n8n</span>
+      </div>
+      <div class="header-btns">
+        <button class="icon-btn" id="historyBtn" title="히스토리">📚</button>
+        <button class="icon-btn" id="settingsBtn" title="설정">⚙️</button>
+      </div>
     </div>
-    <div class="header-btns">
-      <button class="icon-btn" id="historyBtn" title="히스토리">📚</button>
-      <button class="icon-btn" id="settingsBtn" title="설정">⚙️</button>
-    </div>
-  </header>
-
-  <!-- Content -->
-  <main class="app-content">
     <div class="tab-container">
       <div class="tab-group">
         <button class="tab-btn active" id="tabAbstract" data-tab="abstract">📝 초록 요약</button>
@@ -576,6 +579,10 @@
       </div>
       <button class="icon-btn start-btn" id="startBtn" title="분석 시작">▶️</button>
     </div>
+  </header>
+
+  <!-- Content -->
+  <main class="app-content">
     <p id="status"></p>
     <div id="result"></div>
   </main>
