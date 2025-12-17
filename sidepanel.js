@@ -1103,19 +1103,29 @@ async function runFullAnalysis() {
 
 // 탭 클릭 핸들러 (결과 보기만, 자동 분석 X)
 async function handleTabClick(tab) {
-  if (currentTab === tab) return; // 같은 탭 클릭 무시
-
+  const prevTab = currentTab;
   currentTab = tab;
   updateTabUI();
 
-  // 현재 탭에 결과가 없으면 히스토리에서 현재 페이지 논문 찾기
-  if (!tabState[tab].markdown && !tabState[tab].isLoading) {
+  // 현재 브라우저 탭의 논문 ID 확인
+  const [browserTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+  const currentPaperId = browserTab?.url?.includes('arxiv.org') ? extractPaperId(browserTab.url) : null;
+  const loadedPaperId = tabState[tab].paperData?.url ? extractPaperId(tabState[tab].paperData.url) : null;
+
+  // 로딩 중이 아니고, 현재 페이지와 로드된 논문이 다르면 히스토리에서 찾기
+  if (!tabState[tab].isLoading && currentPaperId && currentPaperId !== loadedPaperId) {
     const historyItem = await loadHistoryForCurrentPage(tab);
     if (historyItem) {
       tabState[tab].markdown = historyItem.markdown;
       tabState[tab].usage = historyItem.usage;
       tabState[tab].model = historyItem.model;
       tabState[tab].paperData = { title: historyItem.title, url: historyItem.url };
+    } else {
+      // 히스토리에 없으면 상태 초기화
+      tabState[tab].markdown = '';
+      tabState[tab].usage = null;
+      tabState[tab].model = null;
+      tabState[tab].paperData = null;
     }
   }
 
