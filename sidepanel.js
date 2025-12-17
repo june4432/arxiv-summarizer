@@ -610,5 +610,13 @@ chrome.storage.onChanged.addListener((changes) => {
   if (changes.provider) updateProviderBadge(changes.provider.newValue);
 });
 
+// 컨텍스트 메뉴에서 메시지 수신 처리
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.action === 'startSummarize') {
+    // 요약 버튼 클릭 트리거
+    document.getElementById('send').click();
+  }
+});
+
 // 초기화
 document.addEventListener('DOMContentLoaded', loadSettings);

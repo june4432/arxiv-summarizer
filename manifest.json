@@ -3,7 +3,7 @@
   "name": "arXiv Summarizer",
   "version": "1.1",
   "description": "arXiv 논문을 n8n/Claude/OpenAI로 요약받기",
-  "permissions": ["activeTab", "scripting", "sidePanel", "storage"],
+  "permissions": ["activeTab", "scripting", "sidePanel", "storage", "contextMenus"],
   "action": {
     "default_icon": "icon.png"
   },
