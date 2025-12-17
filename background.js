@@ -5,11 +5,11 @@ chrome.action.onClicked.addListener((tab) => {
 
 // 컨텍스트 메뉴 생성
 chrome.runtime.onInstalled.addListener(() => {
-  // 1. 페이지에서 "이 논문 요약하기"
+  // 1. 페이지에서 "이 논문 요약하기" (텍스트, 이미지 등 어디서든)
   chrome.contextMenus.create({
     id: 'summarize-page',
     title: '📄 이 논문 요약하기',
-    contexts: ['page'],
+    contexts: ['page', 'selection', 'image', 'frame'],
     documentUrlPatterns: ['*://arxiv.org/*']
   });
 
