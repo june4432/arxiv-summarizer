@@ -1,5 +1,6 @@
 let currentSettings = {};
 let currentTab = 'abstract';
+let isTabSwitching = false; // 탭 전환 중 플래그
 
 // 탭별 상태 관리
 const tabState = {
@@ -741,10 +742,12 @@ async function saveResult(markdown, paperData, usage, model, tab) {
     // 히스토리에 추가
     const { history = [] } = await chrome.storage.local.get('history');
 
-    // 같은 논문 + 같은 탭이면 기존 항목 제거
-    const filteredHistory = history.filter(item =>
-      !(item.url === paperData.url && (item.tab || 'abstract') === tab)
-    );
+    // 같은 논문 ID + 같은 탭이면 기존 항목 제거 (URL 파라미터 무시)
+    const currentPaperId = extractPaperId(paperData.url);
+    const filteredHistory = history.filter(item => {
+      const itemPaperId = extractPaperId(item.url);
+      return !(itemPaperId === currentPaperId && (item.tab || 'abstract') === tab);
+    });
 
     const newEntry = {
       id: Date.now(),
@@ -758,9 +761,24 @@ async function saveResult(markdown, paperData, usage, model, tab) {
       timestamp: Date.now()
     };
 
-    // 최대 50개까지만 저장
+    // 히스토리에 추가
     filteredHistory.unshift(newEntry);
-    if (filteredHistory.length > 50) filteredHistory.pop();
+
+    // 스토리지 용량 관리 (최대 4MB, 최대 50개)
+    const MAX_STORAGE_BYTES = 4 * 1024 * 1024; // 4MB
+    const MAX_ITEMS = 50;
+
+    // 개수 제한
+    while (filteredHistory.length > MAX_ITEMS) {
+      filteredHistory.pop();
+    }
+
+    // 용량 제한 (오래된 항목부터 삭제)
+    while (filteredHistory.length > 1) {
+      const size = new Blob([JSON.stringify(filteredHistory)]).size;
+      if (size <= MAX_STORAGE_BYTES) break;
+      filteredHistory.pop();
+    }
 
     await chrome.storage.local.set({ history: filteredHistory });
   } catch (e) {
@@ -1112,41 +1130,52 @@ async function runFullAnalysis() {
 
 // 탭 클릭 핸들러 (결과 보기만, 자동 분석 X)
 async function handleTabClick(tab) {
-  const prevTab = currentTab;
-  currentTab = tab;
-  updateTabUI();
+  // 이미 전환 중이면 무시 (디바운싱)
+  if (isTabSwitching) return;
+  isTabSwitching = true;
 
-  // 현재 브라우저 탭의 논문 ID 확인
-  const [browserTab] = await chrome.tabs.query({ active: true, currentWindow: true });
-  const currentPaperId = browserTab?.url?.includes('arxiv.org') ? extractPaperId(browserTab.url) : null;
-  const loadedPaperId = tabState[tab].paperData?.url ? extractPaperId(tabState[tab].paperData.url) : null;
+  try {
+    currentTab = tab;
+    updateTabUI();
 
-  // 로딩 중이 아니고, 현재 페이지와 로드된 논문이 다르면 히스토리에서 찾기
-  if (!tabState[tab].isLoading && currentPaperId && currentPaperId !== loadedPaperId) {
-    const historyItem = await loadHistoryForCurrentPage(tab);
-    if (historyItem) {
-      tabState[tab].markdown = historyItem.markdown;
-      tabState[tab].usage = historyItem.usage;
-      tabState[tab].model = historyItem.model;
-      tabState[tab].paperData = { title: historyItem.title, url: historyItem.url };
-    } else {
-      // 히스토리에 없으면 상태 초기화
-      tabState[tab].markdown = '';
-      tabState[tab].usage = null;
-      tabState[tab].model = null;
-      tabState[tab].paperData = null;
+    // 현재 브라우저 탭의 논문 ID 확인
+    const [browserTab] = await chrome.tabs.query({ active: true, currentWindow: true });
+    const currentPaperId = browserTab?.url?.includes('arxiv.org') ? extractPaperId(browserTab.url) : null;
+    const loadedPaperId = tabState[tab].paperData?.url ? extractPaperId(tabState[tab].paperData.url) : null;
+
+    // 로딩 중이 아니고, 현재 페이지와 로드된 논문이 다르면 히스토리에서 찾기
+    if (!tabState[tab].isLoading && currentPaperId && currentPaperId !== loadedPaperId) {
+      // 히스토리 검색 중 표시
+      document.getElementById('status').textContent = '🔍 히스토리 확인 중...';
+
+      const historyItem = await loadHistoryForCurrentPage(tab);
+      if (historyItem) {
+        tabState[tab].markdown = historyItem.markdown;
+        tabState[tab].usage = historyItem.usage;
+        tabState[tab].model = historyItem.model;
+        tabState[tab].paperData = { title: historyItem.title, url: historyItem.url };
+      } else {
+        // 히스토리에 없으면 상태 초기화
+        tabState[tab].markdown = '';
+        tabState[tab].usage = null;
+        tabState[tab].model = null;
+        tabState[tab].paperData = null;
+      }
     }
-  }
 
-  displayTabResult(tab);
+    displayTabResult(tab);
 
-  // 상태 메시지 업데이트
-  if (tabState[tab].isLoading) {
-    document.getElementById('status').textContent = tab === 'abstract' ? '⏳ 초록 요약 중...' : '⏳ 전문 분석 중...';
-  } else if (tabState[tab].markdown) {
-    document.getElementById('status').textContent = tab === 'abstract' ? '📝 초록 요약' : '📚 전문 분석';
-  } else {
-    document.getElementById('status').textContent = '▶️ 버튼을 눌러 분석을 시작하세요';
+    // 상태 메시지 업데이트
+    if (tabState[tab].isLoading) {
+      document.getElementById('status').textContent = tab === 'abstract' ? '⏳ 초록 요약 중...' : '⏳ 전문 분석 중...';
+    } else if (tabState[tab].markdown) {
+      document.getElementById('status').textContent = tab === 'abstract' ? '📝 초록 요약' : '📚 전문 분석';
+    } else {
+      document.getElementById('status').textContent = '▶️ 버튼을 눌러 분석을 시작하세요';
+    }
+  } finally {
+    // 약간의 딜레이 후 플래그 해제 (연속 클릭 방지)
+    setTimeout(() => { isTabSwitching = false; }, 100);
   }
 }
 
@@ -1207,7 +1236,17 @@ document.querySelectorAll('.history-tab').forEach(tab => {
 // 전체 히스토리 삭제
 document.getElementById('clearHistory').addEventListener('click', async () => {
   if (confirm('모든 히스토리를 삭제하시겠습니까?')) {
-    await chrome.storage.local.set({ history: [] });
+    // 히스토리와 lastResult 모두 삭제
+    await chrome.storage.local.remove(['history', 'lastResult']);
+
+    // 현재 탭 상태도 초기화
+    tabState.abstract = { markdown: '', usage: null, model: null, paperData: null, isLoading: false };
+    tabState.full = { markdown: '', usage: null, model: null, paperData: null, isLoading: false };
+
+    // UI 업데이트
+    displayTabResult(currentTab);
+    document.getElementById('status').textContent = '🗑️ 히스토리 삭제됨';
+
     renderHistoryModal();
   }
 });
