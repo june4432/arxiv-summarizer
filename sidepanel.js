@@ -1,5 +1,6 @@
 let rawMarkdown = '';
 let currentSettings = {};
+let lastUsage = null;
 
 // 기본 설정값
 const DEFAULT_SETTINGS = {
@@ -64,6 +65,20 @@ const LANGUAGE_MAP = {
   auto: '원문 언어'
 };
 
+// 모델별 가격 (1M 토큰당 USD)
+const PRICING = {
+  // Claude
+  'claude-sonnet-4-20250514': { input: 3, output: 15 },
+  'claude-opus-4-20250514': { input: 15, output: 75 },
+  'claude-3-5-haiku-20241022': { input: 0.8, output: 4 },
+  // OpenAI
+  'gpt-4o': { input: 2.5, output: 10 },
+  'gpt-4o-mini': { input: 0.15, output: 0.6 },
+  'gpt-4-turbo': { input: 10, output: 30 },
+  'o1': { input: 15, output: 60 },
+  'o1-mini': { input: 3, output: 12 }
+};
+
 // 테마 적용
 function applyTheme(isDark) {
   document.documentElement.setAttribute('data-theme', isDark ? 'dark' : 'light');
@@ -73,19 +88,12 @@ function applyTheme(isDark) {
 async function loadSettings() {
   try {
     const syncData = await chrome.storage.sync.get([
-      'darkMode',
-      'provider',
-      'n8nWebhookUrl',
-      'claudeModel',
-      'openaiModel',
-      'summaryLanguage',
-      'userPrompt'
+      'darkMode', 'provider', 'n8nWebhookUrl', 'claudeModel',
+      'openaiModel', 'summaryLanguage', 'userPrompt'
     ]);
 
     const localData = await chrome.storage.local.get([
-      'claudeApiKey',
-      'openaiApiKey',
-      'lastResult'
+      'claudeApiKey', 'openaiApiKey', 'lastResult'
     ]);
 
     currentSettings = {
@@ -100,15 +108,13 @@ async function loadSettings() {
       openaiApiKey: localData.openaiApiKey ?? ''
     };
 
-    // 테마 적용
     applyTheme(currentSettings.darkMode);
-
-    // 프로바이더 뱃지 업데이트
     updateProviderBadge(currentSettings.provider);
 
     // 마지막 결과 복원
     if (localData.lastResult) {
       rawMarkdown = localData.lastResult.markdown || '';
+      lastUsage = localData.lastResult.usage || null;
       if (rawMarkdown) {
         const resultDiv = document.getElementById('result');
         const copyBtn = document.getElementById('copyBtn');
@@ -117,9 +123,11 @@ async function loadSettings() {
         resultDiv.style.display = 'block';
         copyBtn.style.display = 'block';
         document.getElementById('status').textContent = '📝 이전 요약 결과';
+        if (lastUsage) {
+          displayTokenInfo(lastUsage, localData.lastResult.model);
+        }
       }
     }
-
   } catch (e) {
     console.error('설정 불러오기 실패:', e);
   }
@@ -128,11 +136,7 @@ async function loadSettings() {
 // 프로바이더 뱃지 업데이트
 function updateProviderBadge(provider) {
   const badge = document.getElementById('providerBadge');
-  const labels = {
-    n8n: 'n8n',
-    claude: 'Claude',
-    openai: 'OpenAI'
-  };
+  const labels = { n8n: 'n8n', claude: 'Claude', openai: 'OpenAI' };
   badge.textContent = labels[provider] || provider;
 }
 
@@ -146,6 +150,37 @@ function buildPrompt(template, data) {
     .replace(/\{\{language\}\}/g, language);
 }
 
+// 토큰 정보 표시
+function displayTokenInfo(usage, model) {
+  const tokenInfo = document.getElementById('tokenInfo');
+  const pricing = PRICING[model];
+
+  if (!usage || !pricing) {
+    tokenInfo.style.display = 'none';
+    return;
+  }
+
+  const inputCost = (usage.input_tokens / 1000000) * pricing.input;
+  const outputCost = (usage.output_tokens / 1000000) * pricing.output;
+  const totalCost = inputCost + outputCost;
+
+  tokenInfo.innerHTML = `
+    <div class="token-detail">
+      <span>입력 토큰</span>
+      <span>${usage.input_tokens.toLocaleString()}</span>
+    </div>
+    <div class="token-detail">
+      <span>출력 토큰</span>
+      <span>${usage.output_tokens.toLocaleString()}</span>
+    </div>
+    <div class="token-detail">
+      <span>예상 비용</span>
+      <span class="cost">$${totalCost.toFixed(4)}</span>
+    </div>
+  `;
+  tokenInfo.style.display = 'block';
+}
+
 // n8n API 호출
 async function callN8n(data) {
   const response = await fetch(currentSettings.n8nWebhookUrl, {
@@ -156,11 +191,11 @@ async function callN8n(data) {
     })
   });
   const json = await response.json();
-  return json.result || JSON.stringify(json, null, 2);
+  return { text: json.result || JSON.stringify(json, null, 2), usage: null };
 }
 
-// Claude API 호출
-async function callClaude(data) {
+// Claude API 스트리밍 호출
+async function callClaudeStream(data, onChunk) {
   if (!currentSettings.claudeApiKey) {
     throw new Error('Claude API Key가 설정되지 않았습니다. 설정 페이지에서 입력해주세요.');
   }
@@ -178,6 +213,7 @@ async function callClaude(data) {
     body: JSON.stringify({
       model: currentSettings.claudeModel,
       max_tokens: 4096,
+      stream: true,
       messages: [{ role: 'user', content: prompt }]
     })
   });
@@ -187,12 +223,50 @@ async function callClaude(data) {
     throw new Error(error.error?.message || 'Claude API 오류');
   }
 
-  const json = await response.json();
-  return json.content[0].text;
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let fullText = '';
+  let usage = { input_tokens: 0, output_tokens: 0 };
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    const chunk = decoder.decode(value);
+    const lines = chunk.split('\n');
+
+    for (const line of lines) {
+      if (line.startsWith('data: ')) {
+        const jsonStr = line.slice(6);
+        if (jsonStr === '[DONE]') continue;
+
+        try {
+          const data = JSON.parse(jsonStr);
+
+          if (data.type === 'content_block_delta' && data.delta?.text) {
+            fullText += data.delta.text;
+            onChunk(fullText);
+          }
+
+          if (data.type === 'message_delta' && data.usage) {
+            usage.output_tokens = data.usage.output_tokens;
+          }
+
+          if (data.type === 'message_start' && data.message?.usage) {
+            usage.input_tokens = data.message.usage.input_tokens;
+          }
+        } catch (e) {
+          // JSON 파싱 에러 무시
+        }
+      }
+    }
+  }
+
+  return { text: fullText, usage };
 }
 
-// OpenAI API 호출
-async function callOpenAI(data) {
+// OpenAI API 스트리밍 호출
+async function callOpenAIStream(data, onChunk) {
   if (!currentSettings.openaiApiKey) {
     throw new Error('OpenAI API Key가 설정되지 않았습니다. 설정 페이지에서 입력해주세요.');
   }
@@ -208,7 +282,9 @@ async function callOpenAI(data) {
     body: JSON.stringify({
       model: currentSettings.openaiModel,
       messages: [{ role: 'user', content: prompt }],
-      max_tokens: 4096
+      max_tokens: 4096,
+      stream: true,
+      stream_options: { include_usage: true }
     })
   });
 
@@ -217,8 +293,43 @@ async function callOpenAI(data) {
     throw new Error(error.error?.message || 'OpenAI API 오류');
   }
 
-  const json = await response.json();
-  return json.choices[0].message.content;
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let fullText = '';
+  let usage = { input_tokens: 0, output_tokens: 0 };
+
+  while (true) {
+    const { done, value } = await reader.read();
+    if (done) break;
+
+    const chunk = decoder.decode(value);
+    const lines = chunk.split('\n');
+
+    for (const line of lines) {
+      if (line.startsWith('data: ')) {
+        const jsonStr = line.slice(6);
+        if (jsonStr === '[DONE]') continue;
+
+        try {
+          const data = JSON.parse(jsonStr);
+
+          if (data.choices?.[0]?.delta?.content) {
+            fullText += data.choices[0].delta.content;
+            onChunk(fullText);
+          }
+
+          if (data.usage) {
+            usage.input_tokens = data.usage.prompt_tokens;
+            usage.output_tokens = data.usage.completion_tokens;
+          }
+        } catch (e) {
+          // JSON 파싱 에러 무시
+        }
+      }
+    }
+  }
+
+  return { text: fullText, usage };
 }
 
 // 코드 블럭에 복사 버튼 추가
@@ -227,7 +338,6 @@ function addCodeCopyButtons() {
   const preElements = resultDiv.querySelectorAll('pre');
 
   preElements.forEach((pre) => {
-    // 이미 래퍼가 있으면 스킵
     if (pre.parentElement.classList.contains('code-block-wrapper')) return;
 
     const wrapper = document.createElement('div');
@@ -258,19 +368,113 @@ function addCodeCopyButtons() {
   });
 }
 
-// 결과 저장
-async function saveResult(markdown, paperData) {
+// 결과 저장 (마지막 결과 + 히스토리)
+async function saveResult(markdown, paperData, usage, model) {
   try {
+    // 마지막 결과 저장
     await chrome.storage.local.set({
-      lastResult: {
-        markdown,
-        paperData,
-        timestamp: Date.now()
-      }
+      lastResult: { markdown, paperData, usage, model, timestamp: Date.now() }
     });
+
+    // 히스토리에 추가
+    const { history = [] } = await chrome.storage.local.get('history');
+    const newEntry = {
+      id: Date.now(),
+      title: paperData.title,
+      url: paperData.url,
+      markdown,
+      usage,
+      model,
+      provider: currentSettings.provider,
+      timestamp: Date.now()
+    };
+
+    // 최대 50개까지만 저장
+    history.unshift(newEntry);
+    if (history.length > 50) history.pop();
+
+    await chrome.storage.local.set({ history });
   } catch (e) {
     console.error('결과 저장 실패:', e);
   }
+}
+
+// 히스토리 불러오기
+async function loadHistory() {
+  const { history = [] } = await chrome.storage.local.get('history');
+  return history;
+}
+
+// 히스토리 모달 렌더링
+async function renderHistoryModal() {
+  const historyList = document.getElementById('historyList');
+  const history = await loadHistory();
+
+  if (history.length === 0) {
+    historyList.innerHTML = '<div class="history-empty">아직 요약한 논문이 없습니다</div>';
+    return;
+  }
+
+  historyList.innerHTML = history.map(item => `
+    <div class="history-item" data-id="${item.id}">
+      <div class="history-item-title">${item.title}</div>
+      <div class="history-item-meta">
+        <span>${item.provider.toUpperCase()}</span>
+        <span>${new Date(item.timestamp).toLocaleDateString('ko-KR')}</span>
+      </div>
+      <div class="history-item-actions">
+        <button class="load-btn" data-id="${item.id}">불러오기</button>
+        <button class="btn-danger delete-btn" data-id="${item.id}">삭제</button>
+      </div>
+    </div>
+  `).join('');
+
+  // 이벤트 리스너 추가
+  historyList.querySelectorAll('.load-btn').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const id = parseInt(btn.dataset.id);
+      const item = history.find(h => h.id === id);
+      if (item) {
+        rawMarkdown = item.markdown;
+        lastUsage = item.usage;
+        const resultDiv = document.getElementById('result');
+        const copyBtn = document.getElementById('copyBtn');
+        resultDiv.innerHTML = marked.parse(rawMarkdown);
+        addCodeCopyButtons();
+        resultDiv.style.display = 'block';
+        copyBtn.style.display = 'block';
+        document.getElementById('status').textContent = '📝 히스토리에서 불러옴';
+        if (lastUsage && item.model) {
+          displayTokenInfo(lastUsage, item.model);
+        } else {
+          document.getElementById('tokenInfo').style.display = 'none';
+        }
+        closeHistoryModal();
+      }
+    });
+  });
+
+  historyList.querySelectorAll('.delete-btn').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const id = parseInt(btn.dataset.id);
+      const { history = [] } = await chrome.storage.local.get('history');
+      const newHistory = history.filter(h => h.id !== id);
+      await chrome.storage.local.set({ history: newHistory });
+      renderHistoryModal();
+    });
+  });
+}
+
+// 히스토리 모달 열기/닫기
+function openHistoryModal() {
+  document.getElementById('historyModal').classList.add('active');
+  renderHistoryModal();
+}
+
+function closeHistoryModal() {
+  document.getElementById('historyModal').classList.remove('active');
 }
 
 // 메인 요약 요청 처리
@@ -278,19 +482,24 @@ document.getElementById('send').addEventListener('click', async () => {
   const status = document.getElementById('status');
   const result = document.getElementById('result');
   const copyBtn = document.getElementById('copyBtn');
+  const sendBtn = document.getElementById('send');
+  const tokenInfo = document.getElementById('tokenInfo');
 
-  // 최신 설정 다시 로드
   await loadSettings();
 
   status.textContent = '⏳ 파싱 중...';
   result.style.display = 'none';
   copyBtn.style.display = 'none';
+  tokenInfo.style.display = 'none';
+  sendBtn.disabled = true;
   rawMarkdown = '';
+  lastUsage = null;
 
   const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
 
   if (!tab.url.includes('arxiv.org')) {
     status.textContent = '❌ arXiv 페이지에서 실행해주세요.';
+    sendBtn.disabled = false;
     return;
   }
 
@@ -308,53 +517,68 @@ document.getElementById('send').addEventListener('click', async () => {
 
   if (!data.title) {
     status.textContent = '❌ 논문 정보를 찾을 수 없습니다.';
+    sendBtn.disabled = false;
     return;
   }
 
   const providerLabels = { n8n: 'n8n', claude: 'Claude', openai: 'OpenAI' };
-  status.textContent = `⏳ ${providerLabels[currentSettings.provider]} 요청 중... (탭 이동해도 괜찮아요)`;
+  status.textContent = `⏳ ${providerLabels[currentSettings.provider]} 요청 중...`;
 
   try {
-    // 프로바이더에 따라 다른 API 호출
+    let response;
+    let model;
+
+    const onChunk = (text) => {
+      rawMarkdown = text;
+      result.style.display = 'block';
+      result.innerHTML = marked.parse(text);
+    };
+
     switch (currentSettings.provider) {
       case 'claude':
-        rawMarkdown = await callClaude(data);
+        model = currentSettings.claudeModel;
+        response = await callClaudeStream(data, onChunk);
         break;
       case 'openai':
-        rawMarkdown = await callOpenAI(data);
+        model = currentSettings.openaiModel;
+        response = await callOpenAIStream(data, onChunk);
         break;
       case 'n8n':
       default:
-        rawMarkdown = await callN8n(data);
+        model = null;
+        response = await callN8n(data);
+        rawMarkdown = response.text;
+        result.innerHTML = marked.parse(rawMarkdown);
+        result.style.display = 'block';
         break;
     }
 
+    lastUsage = response.usage;
+
     status.textContent = '✅ 완료!';
     copyBtn.style.display = 'block';
-    result.style.display = 'block';
-    result.innerHTML = marked.parse(rawMarkdown);
-
-    // 코드 블럭에 복사 버튼 추가
     addCodeCopyButtons();
 
-    // 결과 저장
-    await saveResult(rawMarkdown, data);
+    if (lastUsage && model) {
+      displayTokenInfo(lastUsage, model);
+    }
+
+    await saveResult(rawMarkdown, data, lastUsage, model);
 
   } catch (e) {
     status.textContent = '❌ 요청 실패: ' + e.message;
+  } finally {
+    sendBtn.disabled = false;
   }
 });
 
 // 마크다운 복사 버튼
 document.getElementById('copyBtn').addEventListener('click', async () => {
   const copyBtn = document.getElementById('copyBtn');
-
   try {
     await navigator.clipboard.writeText(rawMarkdown);
     copyBtn.textContent = '✅ 복사됨!';
-    setTimeout(() => {
-      copyBtn.textContent = '📋 마크다운 복사';
-    }, 2000);
+    setTimeout(() => { copyBtn.textContent = '📋 마크다운 복사'; }, 2000);
   } catch (e) {
     copyBtn.textContent = '❌ 복사 실패';
   }
@@ -365,14 +589,25 @@ document.getElementById('settingsBtn').addEventListener('click', () => {
   chrome.runtime.openOptionsPage();
 });
 
-// 스토리지 변경 감지 (설정 변경 시 실시간 반영)
-chrome.storage.onChanged.addListener((changes, areaName) => {
-  if (changes.darkMode) {
-    applyTheme(changes.darkMode.newValue);
+// 히스토리 버튼
+document.getElementById('historyBtn').addEventListener('click', openHistoryModal);
+document.getElementById('closeHistory').addEventListener('click', closeHistoryModal);
+document.getElementById('historyModal').addEventListener('click', (e) => {
+  if (e.target.id === 'historyModal') closeHistoryModal();
+});
+
+// 전체 히스토리 삭제
+document.getElementById('clearHistory').addEventListener('click', async () => {
+  if (confirm('모든 히스토리를 삭제하시겠습니까?')) {
+    await chrome.storage.local.set({ history: [] });
+    renderHistoryModal();
   }
-  if (changes.provider) {
-    updateProviderBadge(changes.provider.newValue);
-  }
+});
+
+// 스토리지 변경 감지
+chrome.storage.onChanged.addListener((changes) => {
+  if (changes.darkMode) applyTheme(changes.darkMode.newValue);
+  if (changes.provider) updateProviderBadge(changes.provider.newValue);
 });
 
 // 초기화

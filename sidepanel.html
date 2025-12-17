@@ -46,19 +46,32 @@
       margin-bottom: 15px;
     }
 
-    h3 { margin: 0; }
+    .header-left {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
 
-    .settings-btn {
+    h3 { margin: 0; font-size: 16px; }
+
+    .header-btns {
+      display: flex;
+      gap: 4px;
+    }
+
+    .icon-btn {
       background: none;
       border: none;
-      font-size: 20px;
+      font-size: 18px;
       cursor: pointer;
       padding: 5px;
       border-radius: 6px;
       transition: background 0.2s;
+      width: auto;
+      margin: 0;
     }
 
-    .settings-btn:hover {
+    .icon-btn:hover {
       background: var(--bg-secondary);
     }
 
@@ -79,6 +92,11 @@
       background: var(--border);
     }
 
+    button:disabled {
+      opacity: 0.6;
+      cursor: not-allowed;
+    }
+
     #copyBtn {
       background: var(--primary);
       color: white;
@@ -96,12 +114,34 @@
       margin-bottom: 10px;
     }
 
+    /* 토큰 정보 */
+    #tokenInfo {
+      font-size: 12px;
+      color: var(--text-secondary);
+      margin-bottom: 10px;
+      padding: 8px 12px;
+      background: var(--bg-secondary);
+      border-radius: 6px;
+      display: none;
+    }
+
+    #tokenInfo .token-detail {
+      display: flex;
+      justify-content: space-between;
+      margin: 2px 0;
+    }
+
+    #tokenInfo .cost {
+      color: var(--primary);
+      font-weight: 500;
+    }
+
     #result {
       padding: 12px;
       background: var(--bg-secondary);
       border-radius: 8px;
       font-size: 14px;
-      max-height: 70vh;
+      max-height: 60vh;
       overflow-y: auto;
       display: none;
       line-height: 1.6;
@@ -127,15 +167,12 @@
       font-size: 0.9em;
     }
 
-    /* 코드 블럭 컨테이너 */
     .code-block-wrapper {
       position: relative;
       margin: 12px 0;
     }
 
-    .code-block-wrapper pre {
-      margin: 0;
-    }
+    .code-block-wrapper pre { margin: 0; }
 
     .code-copy-btn {
       position: absolute;
@@ -154,19 +191,9 @@
       margin: 0;
     }
 
-    .code-block-wrapper:hover .code-copy-btn {
-      opacity: 1;
-    }
-
-    .code-copy-btn:hover {
-      background: rgba(255, 255, 255, 0.2);
-      color: white;
-    }
-
-    .code-copy-btn.copied {
-      background: rgba(16, 185, 129, 0.3);
-      color: #10b981;
-    }
+    .code-block-wrapper:hover .code-copy-btn { opacity: 1; }
+    .code-copy-btn:hover { background: rgba(255, 255, 255, 0.2); color: white; }
+    .code-copy-btn.copied { background: rgba(16, 185, 129, 0.3); color: #10b981; }
 
     #result pre {
       background: var(--code-bg);
@@ -175,11 +202,7 @@
       border-radius: 6px;
       overflow-x: auto;
     }
-    #result pre code {
-      background: none;
-      padding: 0;
-      color: inherit;
-    }
+    #result pre code { background: none; padding: 0; color: inherit; }
     #result blockquote {
       border-left: 3px solid var(--primary);
       margin: 8px 0;
@@ -200,17 +223,157 @@
       margin-left: 8px;
       vertical-align: middle;
     }
+
+    /* 히스토리 모달 */
+    .modal-overlay {
+      display: none;
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      bottom: 0;
+      background: rgba(0, 0, 0, 0.5);
+      z-index: 100;
+    }
+
+    .modal-overlay.active { display: block; }
+
+    .modal {
+      position: fixed;
+      top: 50%;
+      left: 50%;
+      transform: translate(-50%, -50%);
+      background: var(--bg);
+      border-radius: 12px;
+      padding: 20px;
+      width: 90%;
+      max-width: 400px;
+      max-height: 80vh;
+      overflow-y: auto;
+      z-index: 101;
+      box-shadow: 0 10px 40px rgba(0, 0, 0, 0.3);
+    }
+
+    .modal-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 15px;
+    }
+
+    .modal-header h4 { margin: 0; }
+
+    .modal-close {
+      background: none;
+      border: none;
+      font-size: 20px;
+      cursor: pointer;
+      color: var(--text-secondary);
+      width: auto;
+      padding: 0;
+      margin: 0;
+    }
+
+    .history-list {
+      display: flex;
+      flex-direction: column;
+      gap: 10px;
+    }
+
+    .history-item {
+      padding: 12px;
+      background: var(--bg-secondary);
+      border-radius: 8px;
+      cursor: pointer;
+      border: 1px solid var(--border);
+      transition: border-color 0.2s;
+    }
+
+    .history-item:hover {
+      border-color: var(--primary);
+    }
+
+    .history-item-title {
+      font-size: 13px;
+      font-weight: 500;
+      margin-bottom: 4px;
+      display: -webkit-box;
+      -webkit-line-clamp: 2;
+      -webkit-box-orient: vertical;
+      overflow: hidden;
+    }
+
+    .history-item-meta {
+      font-size: 11px;
+      color: var(--text-secondary);
+      display: flex;
+      justify-content: space-between;
+    }
+
+    .history-empty {
+      text-align: center;
+      color: var(--text-secondary);
+      padding: 30px;
+    }
+
+    .history-item-actions {
+      display: flex;
+      gap: 8px;
+      margin-top: 8px;
+    }
+
+    .history-item-actions button {
+      flex: 1;
+      padding: 6px;
+      font-size: 12px;
+      margin: 0;
+    }
+
+    .btn-danger {
+      background: #ef4444 !important;
+      color: white !important;
+      border: none !important;
+    }
+
+    .clear-history-btn {
+      margin-top: 15px;
+      background: transparent;
+      border: 1px solid var(--border);
+      color: var(--text-secondary);
+      font-size: 12px;
+    }
   </style>
 </head>
 <body>
   <div class="header">
-    <h3>📄 arXiv Summarizer <span id="providerBadge" class="provider-badge">n8n</span></h3>
-    <button class="settings-btn" id="settingsBtn" title="설정">⚙️</button>
+    <div class="header-left">
+      <h3>📄 arXiv Summarizer</h3>
+      <span id="providerBadge" class="provider-badge">n8n</span>
+    </div>
+    <div class="header-btns">
+      <button class="icon-btn" id="historyBtn" title="히스토리">📚</button>
+      <button class="icon-btn" id="settingsBtn" title="설정">⚙️</button>
+    </div>
   </div>
+
   <button id="send">논문 요약 요청</button>
   <button id="copyBtn">📋 마크다운 복사</button>
   <p id="status"></p>
+  <div id="tokenInfo"></div>
   <div id="result"></div>
+
+  <!-- 히스토리 모달 -->
+  <div class="modal-overlay" id="historyModal">
+    <div class="modal">
+      <div class="modal-header">
+        <h4>📚 요약 히스토리</h4>
+        <button class="modal-close" id="closeHistory">×</button>
+      </div>
+      <div class="history-list" id="historyList"></div>
+      <button class="clear-history-btn" id="clearHistory">🗑️ 전체 삭제</button>
+    </div>
+  </div>
+
   <script src="sidepanel.js"></script>
 </body>
 </html>
