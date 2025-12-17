@@ -817,10 +817,12 @@ async function renderHistoryModal() {
         tabState[tab].usage = item.usage;
         tabState[tab].model = item.model;
         tabState[tab].paperData = { title: item.title, url: item.url };
-        currentTab = tab;
-        updateTabUI();
-        displayTabResult(tab);
-        document.getElementById('status').textContent = '📝 히스토리에서 불러옴';
+        // 현재 탭 유지, 해당 탭 데이터만 로드
+        if (currentTab === tab) {
+          displayTabResult(tab);
+        }
+        const tabLabel = tab === 'full' ? '전문 분석' : '초록 요약';
+        document.getElementById('status').textContent = `📝 ${tabLabel} 불러옴`;
         closeHistoryModal();
       }
     });
