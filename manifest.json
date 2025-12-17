@@ -1,9 +1,9 @@
 {
   "manifest_version": 3,
-  "name": "arXiv to n8n",
-  "version": "1.0",
-  "description": "arXiv 논문을 n8n으로 전송하고 요약받기",
-  "permissions": ["activeTab", "scripting", "sidePanel"],
+  "name": "arXiv Summarizer",
+  "version": "1.1",
+  "description": "arXiv 논문을 n8n/Claude/OpenAI로 요약받기",
+  "permissions": ["activeTab", "scripting", "sidePanel", "storage"],
   "action": {
     "default_icon": "icon.png"
   },
@@ -13,5 +13,6 @@
   "background": {
     "service_worker": "background.js"
   },
-  "host_permissions": ["https://arxiv.org/*"]
+  "options_page": "options.html",
+  "host_permissions": ["https://arxiv.org/*", "https://api.anthropic.com/*", "https://api.openai.com/*"]
 }
