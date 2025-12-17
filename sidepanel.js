@@ -320,35 +320,10 @@ function buildPrompt(template, data) {
     .replace(/\{\{language\}\}/g, language);
 }
 
-// 토큰 정보 표시
+// 토큰 정보 표시 (비활성화)
 function displayTokenInfo(usage, model) {
-  const tokenInfo = document.getElementById('tokenInfo');
-  const pricing = PRICING[model];
-
-  if (!usage || !pricing) {
-    tokenInfo.style.display = 'none';
-    return;
-  }
-
-  const inputCost = (usage.input_tokens / 1000000) * pricing.input;
-  const outputCost = (usage.output_tokens / 1000000) * pricing.output;
-  const totalCost = inputCost + outputCost;
-
-  tokenInfo.innerHTML = `
-    <div class="token-detail">
-      <span>입력 토큰</span>
-      <span>${usage.input_tokens.toLocaleString()}</span>
-    </div>
-    <div class="token-detail">
-      <span>출력 토큰</span>
-      <span>${usage.output_tokens.toLocaleString()}</span>
-    </div>
-    <div class="token-detail">
-      <span>예상 비용</span>
-      <span class="cost">$${totalCost.toFixed(4)}</span>
-    </div>
-  `;
-  tokenInfo.style.display = 'block';
+  // 토큰 정보 표시 안함
+  return;
 }
 
 // n8n API 호출
