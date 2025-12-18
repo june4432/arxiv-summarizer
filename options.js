@@ -51,6 +51,7 @@ const DEFAULT_SETTINGS = {
   darkMode: false,
   provider: 'n8n',
   n8nWebhookUrl: 'http://localhost:5678/webhook/12aba2b1-9817-4ba2-9d14-a4141f69a557',
+  atlasUrl: '',
   claudeModel: 'claude-sonnet-4-20250514',
   openaiModel: 'gpt-4o',
   summaryLanguage: 'korean',
@@ -62,6 +63,7 @@ const elements = {
   darkMode: document.getElementById('darkMode'),
   provider: document.getElementById('provider'),
   n8nWebhookUrl: document.getElementById('n8nWebhookUrl'),
+  atlasUrl: document.getElementById('atlasUrl'),
   claudeApiKey: document.getElementById('claudeApiKey'),
   claudeModel: document.getElementById('claudeModel'),
   openaiApiKey: document.getElementById('openaiApiKey'),
@@ -72,6 +74,7 @@ const elements = {
   resetPrompt: document.getElementById('resetPrompt'),
   status: document.getElementById('status'),
   n8nSettings: document.getElementById('n8nSettings'),
+  atlasSettings: document.getElementById('atlasSettings'),
   claudeSettings: document.getElementById('claudeSettings'),
   openaiSettings: document.getElementById('openaiSettings'),
   promptSection: document.getElementById('promptSection')
@@ -85,6 +88,7 @@ function applyTheme(isDark) {
 // 프로바이더에 따른 UI 표시/숨김
 function updateProviderUI(provider) {
   elements.n8nSettings.classList.remove('active');
+  elements.atlasSettings.classList.remove('active');
   elements.claudeSettings.classList.remove('active');
   elements.openaiSettings.classList.remove('active');
 
@@ -92,6 +96,10 @@ function updateProviderUI(provider) {
     case 'n8n':
       elements.n8nSettings.classList.add('active');
       elements.promptSection.style.display = 'none';
+      break;
+    case 'atlas':
+      elements.atlasSettings.classList.add('active');
+      elements.promptSection.style.display = 'block';
       break;
     case 'claude':
       elements.claudeSettings.classList.add('active');
@@ -112,6 +120,7 @@ async function loadSettings() {
       'darkMode',
       'provider',
       'n8nWebhookUrl',
+      'atlasUrl',
       'claudeModel',
       'openaiModel',
       'summaryLanguage',
@@ -128,6 +137,7 @@ async function loadSettings() {
     elements.darkMode.checked = syncData.darkMode ?? DEFAULT_SETTINGS.darkMode;
     elements.provider.value = syncData.provider ?? DEFAULT_SETTINGS.provider;
     elements.n8nWebhookUrl.value = syncData.n8nWebhookUrl ?? DEFAULT_SETTINGS.n8nWebhookUrl;
+    elements.atlasUrl.value = syncData.atlasUrl ?? DEFAULT_SETTINGS.atlasUrl;
     elements.claudeModel.value = syncData.claudeModel ?? DEFAULT_SETTINGS.claudeModel;
     elements.openaiModel.value = syncData.openaiModel ?? DEFAULT_SETTINGS.openaiModel;
     elements.summaryLanguage.value = syncData.summaryLanguage ?? DEFAULT_SETTINGS.summaryLanguage;
@@ -155,6 +165,7 @@ async function saveSettings() {
       darkMode: elements.darkMode.checked,
       provider: elements.provider.value,
       n8nWebhookUrl: elements.n8nWebhookUrl.value,
+      atlasUrl: elements.atlasUrl.value,
       claudeModel: elements.claudeModel.value,
       openaiModel: elements.openaiModel.value,
       summaryLanguage: elements.summaryLanguage.value,

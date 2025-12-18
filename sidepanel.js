@@ -25,6 +25,7 @@ const DEFAULT_SETTINGS = {
   darkMode: false,
   provider: 'n8n',
   n8nWebhookUrl: 'http://localhost:5678/webhook/12aba2b1-9817-4ba2-9d14-a4141f69a557',
+  atlasUrl: '',
   claudeModel: 'claude-sonnet-4-20250514',
   openaiModel: 'gpt-4o',
   summaryLanguage: 'korean',
@@ -166,7 +167,7 @@ function applyTheme(isDark) {
 async function loadSettings() {
   try {
     const syncData = await chrome.storage.sync.get([
-      'darkMode', 'provider', 'n8nWebhookUrl', 'claudeModel',
+      'darkMode', 'provider', 'n8nWebhookUrl', 'atlasUrl', 'claudeModel',
       'openaiModel', 'summaryLanguage', 'userPrompt'
     ]);
 
@@ -178,6 +179,7 @@ async function loadSettings() {
       darkMode: syncData.darkMode ?? DEFAULT_SETTINGS.darkMode,
       provider: syncData.provider ?? DEFAULT_SETTINGS.provider,
       n8nWebhookUrl: syncData.n8nWebhookUrl ?? DEFAULT_SETTINGS.n8nWebhookUrl,
+      atlasUrl: syncData.atlasUrl ?? DEFAULT_SETTINGS.atlasUrl,
       claudeModel: syncData.claudeModel ?? DEFAULT_SETTINGS.claudeModel,
       openaiModel: syncData.openaiModel ?? DEFAULT_SETTINGS.openaiModel,
       summaryLanguage: syncData.summaryLanguage ?? DEFAULT_SETTINGS.summaryLanguage,
@@ -219,7 +221,7 @@ async function restoreLastResult() {
 // 프로바이더 뱃지 업데이트
 function updateProviderBadge(provider) {
   const badge = document.getElementById('providerBadge');
-  const labels = { n8n: 'n8n', claude: 'Claude', openai: 'OpenAI' };
+  const labels = { n8n: 'n8n', atlas: 'Atlas', claude: 'Claude', openai: 'OpenAI' };
   badge.textContent = labels[provider] || provider;
 }
 
@@ -232,6 +234,24 @@ function updateTabUI() {
   });
   // 현재 탭이 로딩 중이면 시작 버튼 비활성화
   document.getElementById('startBtn').disabled = tabState[currentTab].isLoading;
+}
+
+// 로딩 UI 표시/숨김
+function showLoading(text, subtext) {
+  const container = document.getElementById('loadingContainer');
+  const loadingText = document.getElementById('loadingText');
+  const loadingSubtext = document.getElementById('loadingSubtext');
+  const result = document.getElementById('result');
+
+  loadingText.textContent = text || '요청 중...';
+  loadingSubtext.textContent = subtext || '잠시만 기다려주세요';
+  container.classList.add('active');
+  result.style.display = 'none';
+}
+
+function hideLoading() {
+  const container = document.getElementById('loadingContainer');
+  container.classList.remove('active');
 }
 
 // 탭 결과 표시 (로딩 상태 포함)
@@ -337,6 +357,100 @@ async function callN8n(data) {
   });
   const json = await response.json();
   return { text: json.result || JSON.stringify(json, null, 2), usage: null };
+}
+
+// Atlas API 스트리밍 호출 (초록 요약)
+async function callAtlasStream(data, onChunk) {
+  if (!currentSettings.atlasUrl) {
+    throw new Error('Atlas URL이 설정되지 않았습니다. 설정 페이지에서 입력해주세요.');
+  }
+
+  const prompt = buildPrompt(currentSettings.userPrompt, data);
+
+  const response = await fetch(currentSettings.atlasUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      message: prompt
+    })
+  });
+
+  if (!response.ok) {
+    throw new Error(`Atlas API 오류: ${response.status}`);
+  }
+
+  const contentType = response.headers.get('content-type') || '';
+
+  // 스트리밍 응답인 경우
+  if (contentType.includes('text/event-stream') || contentType.includes('text/plain') || !contentType.includes('application/json')) {
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let fullText = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      const chunk = decoder.decode(value, { stream: true });
+      fullText += chunk;
+      onChunk(fullText);
+    }
+
+    return { text: fullText, usage: null };
+  }
+
+  // JSON 응답인 경우 (스트리밍 미지원 서버)
+  const json = await response.json();
+  const text = json.message || json.result || JSON.stringify(json, null, 2);
+  onChunk(text);
+  return { text, usage: null };
+}
+
+// Atlas API 스트리밍 호출 (전문 분석)
+async function callAtlasFullAnalysisStream(data, onChunk) {
+  if (!currentSettings.atlasUrl) {
+    throw new Error('Atlas URL이 설정되지 않았습니다. 설정 페이지에서 입력해주세요.');
+  }
+
+  const prompt = buildFullAnalysisPrompt(data);
+
+  const response = await fetch(currentSettings.atlasUrl, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({
+      message: prompt
+    })
+  });
+
+  if (!response.ok) {
+    throw new Error(`Atlas API 오류: ${response.status}`);
+  }
+
+  const contentType = response.headers.get('content-type') || '';
+
+  // 스트리밍 응답인 경우
+  if (contentType.includes('text/event-stream') || contentType.includes('text/plain') || !contentType.includes('application/json')) {
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let fullText = '';
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      const chunk = decoder.decode(value, { stream: true });
+      fullText += chunk;
+      onChunk(fullText);
+    }
+
+    return { text: fullText, usage: null };
+  }
+
+  // JSON 응답인 경우 (스트리밍 미지원 서버)
+  const json = await response.json();
+  const text = json.message || json.result || JSON.stringify(json, null, 2);
+  onChunk(text);
+  return { text, usage: null };
 }
 
 // Claude API 스트리밍 호출
@@ -884,8 +998,8 @@ async function runAbstractAnalysis() {
 
   // 현재 탭이면 UI 초기화
   if (currentTab === TAB) {
-    status.textContent = '⏳ 파싱 중...';
-    result.style.display = 'none';
+    status.textContent = '';
+    showLoading('논문 정보 파싱 중...', 'arXiv 페이지에서 정보를 추출합니다');
     copyBtn.disabled = true;
     tokenInfo.style.display = 'none';
   }
@@ -893,7 +1007,10 @@ async function runAbstractAnalysis() {
   const [browserTab] = await chrome.tabs.query({ active: true, currentWindow: true });
 
   if (!browserTab.url.includes('arxiv.org')) {
-    if (currentTab === TAB) status.textContent = '❌ arXiv 페이지에서 실행해주세요.';
+    if (currentTab === TAB) {
+      hideLoading();
+      status.textContent = '❌ arXiv 페이지에서 실행해주세요.';
+    }
     tabState[TAB].isLoading = false;
     updateTabUI();
     return;
@@ -912,15 +1029,18 @@ async function runAbstractAnalysis() {
   const data = extracted.result;
 
   if (!data.title) {
-    if (currentTab === TAB) status.textContent = '❌ 논문 정보를 찾을 수 없습니다.';
+    if (currentTab === TAB) {
+      hideLoading();
+      status.textContent = '❌ 논문 정보를 찾을 수 없습니다.';
+    }
     tabState[TAB].isLoading = false;
     updateTabUI();
     return;
   }
 
-  const providerLabels = { n8n: 'n8n', claude: 'Claude', openai: 'OpenAI' };
+  const providerLabels = { n8n: 'n8n', atlas: 'Atlas', claude: 'Claude', openai: 'OpenAI' };
   if (currentTab === TAB) {
-    status.textContent = `⏳ ${providerLabels[currentSettings.provider]} 요청 중...`;
+    showLoading(`${providerLabels[currentSettings.provider]}에 요청 중...`, '응답을 기다리는 중입니다');
   }
 
   try {
@@ -931,6 +1051,7 @@ async function runAbstractAnalysis() {
       tabState[TAB].markdown = text;
       // 현재 탭이 abstract일 때만 UI 업데이트
       if (currentTab === TAB) {
+        hideLoading();
         result.style.display = 'block';
         result.innerHTML = marked.parse(text);
       }
@@ -945,12 +1066,17 @@ async function runAbstractAnalysis() {
         model = currentSettings.openaiModel;
         response = await callOpenAIStream(data, onChunk);
         break;
+      case 'atlas':
+        model = null;
+        response = await callAtlasStream(data, onChunk);
+        break;
       case 'n8n':
       default:
         model = null;
         response = await callN8n(data);
         tabState[TAB].markdown = response.text;
         if (currentTab === TAB) {
+          hideLoading();
           result.innerHTML = marked.parse(response.text);
           result.style.display = 'block';
         }
@@ -975,7 +1101,10 @@ async function runAbstractAnalysis() {
     await saveResult(tabState[TAB].markdown, data, response.usage, model, TAB);
 
   } catch (e) {
-    if (currentTab === TAB) status.textContent = '❌ 요청 실패: ' + e.message;
+    if (currentTab === TAB) {
+      hideLoading();
+      status.textContent = '❌ 요청 실패: ' + e.message;
+    }
   } finally {
     tabState[TAB].isLoading = false;
     updateTabUI();
@@ -994,7 +1123,7 @@ async function runFullAnalysis() {
 
   // n8n은 전문 분석 미지원
   if (currentSettings.provider === 'n8n') {
-    if (currentTab === TAB) status.textContent = '❌ 전문 분석은 Claude 또는 OpenAI에서만 사용 가능합니다.';
+    if (currentTab === TAB) status.textContent = '❌ 전문 분석은 Atlas, Claude 또는 OpenAI에서만 사용 가능합니다.';
     return;
   }
 
@@ -1004,8 +1133,8 @@ async function runFullAnalysis() {
 
   // 현재 탭이면 UI 초기화
   if (currentTab === TAB) {
-    status.textContent = '⏳ 논문 HTML 가져오는 중...';
-    result.style.display = 'none';
+    status.textContent = '';
+    showLoading('논문 HTML 가져오는 중...', 'arXiv에서 전문을 로드합니다');
     copyBtn.disabled = true;
     tokenInfo.style.display = 'none';
   }
@@ -1013,7 +1142,10 @@ async function runFullAnalysis() {
   const [browserTab] = await chrome.tabs.query({ active: true, currentWindow: true });
 
   if (!browserTab.url.includes('arxiv.org')) {
-    if (currentTab === TAB) status.textContent = '❌ arXiv 페이지에서 실행해주세요.';
+    if (currentTab === TAB) {
+      hideLoading();
+      status.textContent = '❌ arXiv 페이지에서 실행해주세요.';
+    }
     tabState[TAB].isLoading = false;
     updateTabUI();
     return;
@@ -1033,14 +1165,19 @@ async function runFullAnalysis() {
     const basicData = extracted.result;
 
     if (!basicData.title) {
-      if (currentTab === TAB) status.textContent = '❌ 논문 정보를 찾을 수 없습니다.';
+      if (currentTab === TAB) {
+        hideLoading();
+        status.textContent = '❌ 논문 정보를 찾을 수 없습니다.';
+      }
       tabState[TAB].isLoading = false;
       updateTabUI();
       return;
     }
 
     // HTML에서 전문 가져오기
-    if (currentTab === TAB) status.textContent = '⏳ 논문 전문 파싱 중...';
+    if (currentTab === TAB) {
+      showLoading('논문 전문 파싱 중...', '전문 내용을 분석하고 있습니다');
+    }
     const fullText = await fetchArxivFullText(basicData.url);
 
     const data = {
@@ -1050,9 +1187,9 @@ async function runFullAnalysis() {
     };
 
     const charCount = fullText.length.toLocaleString();
-    const providerLabels = { claude: 'Claude', openai: 'OpenAI' };
+    const providerLabels = { atlas: 'Atlas', claude: 'Claude', openai: 'OpenAI' };
     if (currentTab === TAB) {
-      status.textContent = `⏳ ${providerLabels[currentSettings.provider]} 전문 분석 중... (${charCount}자)`;
+      showLoading(`${providerLabels[currentSettings.provider]}에 전문 분석 요청 중...`, `${charCount}자 분량의 논문을 분석합니다`);
     }
 
     let response;
@@ -1062,6 +1199,7 @@ async function runFullAnalysis() {
       tabState[TAB].markdown = text;
       // 현재 탭이 full일 때만 UI 업데이트
       if (currentTab === TAB) {
+        hideLoading();
         result.style.display = 'block';
         result.innerHTML = marked.parse(text);
       }
@@ -1075,6 +1213,10 @@ async function runFullAnalysis() {
       case 'openai':
         model = currentSettings.openaiModel;
         response = await callOpenAIFullAnalysis(data, onChunk);
+        break;
+      case 'atlas':
+        model = null;
+        response = await callAtlasFullAnalysisStream(data, onChunk);
         break;
     }
 
@@ -1096,7 +1238,10 @@ async function runFullAnalysis() {
     await saveResult(tabState[TAB].markdown, tabState[TAB].paperData, response.usage, model, TAB);
 
   } catch (e) {
-    if (currentTab === TAB) status.textContent = '❌ 오류: ' + e.message;
+    if (currentTab === TAB) {
+      hideLoading();
+      status.textContent = '❌ 오류: ' + e.message;
+    }
   } finally {
     tabState[TAB].isLoading = false;
     updateTabUI();

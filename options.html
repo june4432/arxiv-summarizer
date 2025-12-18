@@ -263,6 +263,7 @@
       <label for="provider">요약 서비스 선택</label>
       <select id="provider">
         <option value="n8n">n8n Webhook (커스텀 워크플로우)</option>
+        <option value="atlas">Atlas (커스텀 엔드포인트)</option>
         <option value="claude">Claude API (Anthropic)</option>
         <option value="openai">OpenAI API</option>
       </select>
@@ -274,6 +275,15 @@
         <label for="n8nWebhookUrl">Webhook URL</label>
         <input type="text" id="n8nWebhookUrl" placeholder="http://localhost:5678/webhook/...">
         <p class="hint">n8n에서 생성한 Webhook URL을 입력하세요</p>
+      </div>
+    </div>
+
+    <!-- Atlas 설정 -->
+    <div id="atlasSettings" class="conditional-section">
+      <div class="form-group">
+        <label for="atlasUrl">Atlas URL</label>
+        <input type="text" id="atlasUrl" placeholder="https://your-atlas-endpoint.com/api/...">
+        <p class="hint">Atlas 엔드포인트 URL을 입력하세요</p>
       </div>
     </div>
 
