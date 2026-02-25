@@ -123,6 +123,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message.action === 'notionGetBlockChildren') {
+    notionApiCall(`https://api.notion.com/v1/blocks/${message.blockId}/children?page_size=100`, 'GET', message.token)
+      .then(data => sendResponse({ success: true, data }))
+      .catch(e => sendResponse({ success: false, error: e.message }));
+    return true;
+  }
+
   if (message.action === 'notionAppendBlocks') {
     notionApiCall(`https://api.notion.com/v1/blocks/${message.blockId}/children`, 'PATCH', message.token, message.body)
       .then(data => sendResponse({ success: true, data }))

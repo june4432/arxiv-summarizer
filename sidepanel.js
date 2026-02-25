@@ -1827,11 +1827,33 @@ function extractKeywords(markdown) {
   return keywords.slice(0, 10);
 }
 
-// Notion DB 생성 (최초 1회)
+// Notion DB 확보 (기존 DB 검색 → 없으면 생성)
 async function ensureNotionDatabase(token, parentPageId) {
   let dbId = await getNotionDbId();
   if (dbId) return dbId;
 
+  // 부모 페이지 하위에서 기존 DB 검색
+  try {
+    const childrenRes = await chrome.runtime.sendMessage({
+      action: 'notionGetBlockChildren',
+      token,
+      blockId: parentPageId
+    });
+    if (childrenRes.success && childrenRes.data?.results) {
+      const existingDb = childrenRes.data.results.find(
+        block => block.type === 'child_database' && block.child_database?.title === 'arXiv 논문 요약'
+      );
+      if (existingDb) {
+        dbId = existingDb.id;
+        await setNotionDbId(dbId);
+        return dbId;
+      }
+    }
+  } catch (e) {
+    console.warn('기존 DB 검색 실패, 새로 생성 시도:', e);
+  }
+
+  // 기존 DB 없으면 새로 생성
   const response = await chrome.runtime.sendMessage({
     action: 'notionCreateDatabase',
     token,
