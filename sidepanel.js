@@ -1058,6 +1058,7 @@ async function runAbstractAnalysis() {
   });
 
   const data = extracted.result;
+  console.log('[arXiv extract] publishedDate:', data.publishedDate);
 
   if (!data.title) {
     if (currentTab === TAB) {
@@ -2039,12 +2040,16 @@ async function createNotionAbstractEntry(token, dbId, item) {
   }
 
   // 논문 출판일
+  console.log('[Notion] publishedDate raw:', item.publishedDate);
   if (item.publishedDate) {
     const pd = parsePublishedDate(item.publishedDate);
+    console.log('[Notion] publishedDate parsed:', pd);
     if (pd) {
       properties['Published'] = { date: { start: pd } };
     }
   }
+
+  console.log('[Notion] properties:', JSON.stringify(properties, null, 2));
 
   const response = await chrome.runtime.sendMessage({
     action: 'notionCreatePage',
