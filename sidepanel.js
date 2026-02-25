@@ -1099,6 +1099,7 @@ async function runAbstractAnalysis() {
     if (currentTab === TAB) {
       status.textContent = '✅ 완료!';
       copyBtn.disabled = false;
+      document.getElementById('notionSaveBtn').disabled = false;
       addCodeCopyButtons();
       if (response.usage && model) {
         displayTokenInfo(response.usage, model);
@@ -1236,6 +1237,7 @@ async function runFullAnalysis() {
     if (currentTab === TAB) {
       status.textContent = '✅ 전문 분석 완료!';
       copyBtn.disabled = false;
+      document.getElementById('notionSaveBtn').disabled = false;
       addCodeCopyButtons();
       if (response.usage && model) {
         displayTokenInfo(response.usage, model);
