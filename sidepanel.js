@@ -830,6 +830,7 @@ async function saveResult(markdown, paperData, usage, model, tab) {
       model,
       tab,
       provider: currentSettings.provider,
+      publishedDate: paperData.publishedDate || null,
       timestamp: Date.now()
     };
 
@@ -1029,7 +1030,25 @@ async function runAbstractAnalysis() {
       const title = document.querySelector('h1.title')?.textContent?.replace('Title:', '').trim();
       const abstract = document.querySelector('blockquote.abstract')?.textContent?.replace('Abstract:', '').trim();
       const url = window.location.href;
-      return { title, abstract, url };
+      // 출판일 추출 (meta 태그 → dateline → Submitted on 텍스트)
+      let publishedDate = null;
+      const metaDate = document.querySelector('meta[name="citation_date"]')
+        || document.querySelector('meta[name="citation_publication_date"]')
+        || document.querySelector('meta[name="DC.date"]');
+      if (metaDate) {
+        publishedDate = metaDate.getAttribute('content');
+      } else {
+        const dateline = document.querySelector('.dateline');
+        if (dateline) {
+          const m = dateline.textContent.match(/(\d{1,2}\s+\w+\s+\d{4})/);
+          if (m) publishedDate = m[1];
+        }
+        if (!publishedDate) {
+          const submissionText = document.body.innerText.match(/Submitted on\s+(\d{1,2}\s+\w+\s+\d{4})/);
+          if (submissionText) publishedDate = submissionText[1];
+        }
+      }
+      return { title, abstract, url, publishedDate };
     }
   });
 
@@ -1166,7 +1185,24 @@ async function runFullAnalysis() {
       func: () => {
         const title = document.querySelector('h1.title')?.textContent?.replace('Title:', '').trim();
         const url = window.location.href;
-        return { title, url };
+        let publishedDate = null;
+        const metaDate = document.querySelector('meta[name="citation_date"]')
+          || document.querySelector('meta[name="citation_publication_date"]')
+          || document.querySelector('meta[name="DC.date"]');
+        if (metaDate) {
+          publishedDate = metaDate.getAttribute('content');
+        } else {
+          const dateline = document.querySelector('.dateline');
+          if (dateline) {
+            const m = dateline.textContent.match(/(\d{1,2}\s+\w+\s+\d{4})/);
+            if (m) publishedDate = m[1];
+          }
+          if (!publishedDate) {
+            const submissionText = document.body.innerText.match(/Submitted on\s+(\d{1,2}\s+\w+\s+\d{4})/);
+            if (submissionText) publishedDate = submissionText[1];
+          }
+        }
+        return { title, url, publishedDate };
       }
     });
 
@@ -1231,7 +1267,7 @@ async function runFullAnalysis() {
     // 상태 저장
     tabState[TAB].usage = response.usage;
     tabState[TAB].model = model;
-    tabState[TAB].paperData = { title: data.title, url: data.url, abstract: '[전문 분석]' };
+    tabState[TAB].paperData = { title: data.title, url: data.url, abstract: '[전문 분석]', publishedDate: basicData.publishedDate };
 
     // 현재 탭이면 UI 업데이트
     if (currentTab === TAB) {
@@ -1355,6 +1391,7 @@ document.getElementById('notionSaveBtn').addEventListener('click', async () => {
       model: state.model,
       tab: currentTab,
       provider: currentSettings.provider,
+      publishedDate: state.paperData.publishedDate || null,
       timestamp: Date.now()
     };
     await saveToNotion(item);
@@ -1783,6 +1820,24 @@ function truncateText(text, max) {
   return text.length > max ? text.slice(0, max) : text;
 }
 
+// 출판일 문자열 → YYYY-MM-DD 변환
+function parsePublishedDate(dateStr) {
+  if (!dateStr) return null;
+  // ISO 형식 (2017-06-12, 2017/06/12)
+  const isoMatch = dateStr.match(/(\d{4})[-/](\d{1,2})[-/](\d{1,2})/);
+  if (isoMatch) {
+    return `${isoMatch[1]}-${isoMatch[2].padStart(2, '0')}-${isoMatch[3].padStart(2, '0')}`;
+  }
+  // 영문 형식 (12 Jun 2017)
+  const months = { jan: '01', feb: '02', mar: '03', apr: '04', may: '05', jun: '06', jul: '07', aug: '08', sep: '09', oct: '10', nov: '11', dec: '12' };
+  const engMatch = dateStr.match(/(\d{1,2})\s+(\w{3})\s+(\d{4})/);
+  if (engMatch) {
+    const mon = months[engMatch[2].toLowerCase().slice(0, 3)];
+    if (mon) return `${engMatch[3]}-${mon}-${engMatch[1].padStart(2, '0')}`;
+  }
+  return null;
+}
+
 // 키워드 추출 (마크다운에서 "핵심 키워드" 섹션 파싱)
 function extractKeywords(markdown) {
   const match = markdown.match(/핵심\s*키워드[^\n]*\n([\s\S]*?)(?:\n#|\n---|\n\n\n|$)/i);
@@ -1884,6 +1939,7 @@ async function ensureNotionDatabase(token, parentPageId) {
         'Title': { title: {} },
         'URL': { url: {} },
         'Date': { date: {} },
+        'Published': { date: {} },
         'Keywords': { multi_select: {} },
         'Provider': { select: { options: [
           { name: 'CLAUDE', color: 'orange' },
@@ -1924,6 +1980,14 @@ async function createNotionAbstractEntry(token, dbId, item) {
     properties['Keywords'] = { multi_select: keywords.map(k => ({ name: k })) };
   }
 
+  // 논문 출판일
+  if (item.publishedDate) {
+    const pd = parsePublishedDate(item.publishedDate);
+    if (pd) {
+      properties['Published'] = { date: { start: pd } };
+    }
+  }
+
   const response = await chrome.runtime.sendMessage({
     action: 'notionCreatePage',
     token,
@@ -1945,9 +2009,13 @@ async function createNotionFullPage(token, parentPageId, item) {
 
   // 메타데이터 블록 (본문 최상단)
   const metaLines = [];
+  if (item.publishedDate) {
+    const pd = parsePublishedDate(item.publishedDate);
+    if (pd) metaLines.push(`Published: ${pd}`);
+  }
   if (item.provider) metaLines.push(`Provider: ${item.provider.toUpperCase()}`);
   if (item.model) metaLines.push(`Model: ${item.model}`);
-  metaLines.push(`Date: ${date}`);
+  metaLines.push(`Saved: ${date}`);
   if (keywords.length > 0) metaLines.push(`Keywords: ${keywords.join(', ')}`);
 
   const metaBlock = {
