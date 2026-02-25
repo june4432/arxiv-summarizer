@@ -347,6 +347,25 @@
     <button type="button" class="btn" id="resetPrompt" style="background: var(--border); color: var(--text);">기본 프롬프트로 초기화</button>
   </div>
 
+  <!-- Notion 연동 설정 -->
+  <div class="section">
+    <div class="section-title">📓 Notion 연동</div>
+    <div class="form-group">
+      <label for="notionToken">Integration Token</label>
+      <div class="api-key-input">
+        <input type="password" id="notionToken" placeholder="ntn_...">
+        <button type="button" class="api-key-toggle" data-target="notionToken">👁️</button>
+      </div>
+      <p class="hint">Notion Integration에서 발급한 Internal Token을 입력하세요</p>
+    </div>
+    <div class="form-group">
+      <label for="notionPageId">Parent Page ID</label>
+      <input type="text" id="notionPageId" placeholder="312ee7ef-42c9-8078-bc7b-e357ec4fa11a">
+      <p class="hint">DB가 생성될 Notion 페이지의 ID (URL에서 복사). 해당 페이지에서 ··· → 연결 → Integration을 추가해야 합니다.</p>
+    </div>
+    <button type="button" class="btn" id="testNotionBtn" style="background: var(--border); color: var(--text);">🔗 연결 테스트</button>
+  </div>
+
   <!-- 저장 버튼 -->
   <div class="btn-group">
     <button type="button" class="btn btn-primary" id="saveBtn">💾 설정 저장</button>

@@ -465,6 +465,102 @@
       font-size: 12px;
     }
 
+    .history-actions {
+      display: flex;
+      gap: 6px;
+      margin-top: 12px;
+      flex-wrap: wrap;
+    }
+
+    .history-actions button {
+      flex: 1;
+      min-width: 80px;
+      padding: 8px 10px;
+      font-size: 12px;
+      margin: 0;
+      border-radius: 6px;
+    }
+
+    .btn-notion {
+      background: #000 !important;
+      color: white !important;
+      border: none !important;
+    }
+
+    .btn-notion:hover {
+      background: #333 !important;
+    }
+
+    .btn-notion:disabled {
+      background: #666 !important;
+      opacity: 0.6;
+    }
+
+    .history-item-actions .btn-notion-save {
+      background: #000;
+      color: white;
+      border: none;
+    }
+
+    .history-item-actions .btn-notion-save:hover {
+      background: #333;
+    }
+
+    .notion-status {
+      font-size: 10px;
+      color: var(--text-secondary);
+      margin-top: 4px;
+    }
+
+    .notion-status.saved {
+      color: #10b981;
+    }
+
+    /* 토스트 알림 */
+    .toast-container {
+      position: fixed;
+      bottom: 80px;
+      left: 50%;
+      transform: translateX(-50%);
+      z-index: 200;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      gap: 8px;
+      pointer-events: none;
+    }
+
+    .toast {
+      padding: 10px 20px;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 500;
+      color: white;
+      box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+      pointer-events: auto;
+      animation: toastSlideUp 0.3s ease-out, toastFadeOut 0.3s ease-in forwards;
+      animation-delay: 0s, 2.7s;
+      white-space: nowrap;
+    }
+
+    .toast.success {
+      background: #10b981;
+    }
+
+    .toast.error {
+      background: #ef4444;
+    }
+
+    @keyframes toastSlideUp {
+      from { opacity: 0; transform: translateY(20px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+
+    @keyframes toastFadeOut {
+      from { opacity: 1; }
+      to { opacity: 0; }
+    }
+
     /* 버튼 그룹 */
     .btn-group {
       display: flex;
@@ -639,6 +735,7 @@
     <div class="footer-btns">
       <button id="viewPaperBtn" disabled>📄 논문 보기</button>
       <button id="copyBtn" disabled>📋 복사</button>
+      <button id="notionSaveBtn" class="btn-notion" disabled>📓 Notion</button>
     </div>
   </footer>
 
@@ -655,9 +752,17 @@
         <button class="history-tab" data-filter="full">📚 전문</button>
       </div>
       <div class="history-grid" id="historyList"></div>
+      <div class="history-actions">
+        <button id="exportHistoryBtn">📤 내보내기</button>
+        <button id="importHistoryBtn">📥 가져오기</button>
+      </div>
+      <input type="file" id="importFileInput" accept=".json" style="display:none;">
       <button class="clear-history-btn" id="clearHistory">🗑️ 전체 삭제</button>
     </div>
   </div>
+
+  <!-- 토스트 알림 컨테이너 -->
+  <div class="toast-container" id="toastContainer"></div>
 
   <script src="sidepanel.js"></script>
 </body>

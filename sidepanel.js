@@ -20,6 +20,88 @@ const tabState = {
   }
 };
 
+// Claude OAuth 토큰 감지 및 요청 빌더
+function isClaudeOAuthToken(apiKey) {
+  return apiKey && apiKey.startsWith('sk-ant-oat');
+}
+
+const CLAUDE_OAUTH_SYSTEM_PROMPT = 'You are Claude Code, Anthropic\'s official CLI for Claude.';
+
+function buildClaudeFetchOptions(apiKey, model, maxTokens, prompt, stream = true) {
+  const isOAuth = isClaudeOAuthToken(apiKey);
+
+  if (isOAuth) {
+    return {
+      url: 'https://api.anthropic.com/v1/messages?beta=true',
+      headers: {
+        'Content-Type': 'application/json',
+        'Accept': 'text/event-stream',
+        'Authorization': `Bearer ${apiKey}`,
+        'anthropic-version': '2023-06-01',
+        'anthropic-beta': 'oauth-2025-04-20,interleaved-thinking-2025-05-14,claude-code-20250219,token-efficient-tools-2025-02-19',
+        'User-Agent': 'claude-cli/2.1.33',
+        'x-app': 'cli'
+      },
+      body: {
+        model,
+        max_tokens: maxTokens,
+        stream,
+        system: [{ type: 'text', text: CLAUDE_OAUTH_SYSTEM_PROMPT, cache_control: { type: 'ephemeral' } }],
+        messages: [{ role: 'user', content: prompt }]
+      }
+    };
+  }
+
+  return {
+    url: 'https://api.anthropic.com/v1/messages',
+    headers: {
+      'Content-Type': 'application/json',
+      'x-api-key': apiKey,
+      'anthropic-version': '2023-06-01'
+    },
+    body: {
+      model,
+      max_tokens: maxTokens,
+      stream,
+      messages: [{ role: 'user', content: prompt }]
+    }
+  };
+}
+
+// Background service worker를 통한 스트리밍 프록시 (OAuth CORS 우회)
+function streamClaudeViaBackground(fetchOpts, onChunk) {
+  return new Promise((resolve, reject) => {
+    const port = chrome.runtime.connect({ name: 'claude-api-proxy' });
+    let fullText = '';
+    let usage = { input_tokens: 0, output_tokens: 0 };
+
+    port.onMessage.addListener((msg) => {
+      switch (msg.type) {
+        case 'delta':
+          fullText += msg.text;
+          onChunk(fullText);
+          break;
+        case 'usage_input':
+          usage.input_tokens = msg.input_tokens;
+          break;
+        case 'usage_output':
+          usage.output_tokens = msg.output_tokens;
+          break;
+        case 'done':
+          port.disconnect();
+          resolve({ text: fullText, usage });
+          break;
+        case 'error':
+          port.disconnect();
+          reject(new Error(msg.error));
+          break;
+      }
+    });
+
+    port.postMessage({ url: fetchOpts.url, headers: fetchOpts.headers, body: fetchOpts.body });
+  });
+}
+
 // 기본 설정값
 const DEFAULT_SETTINGS = {
   darkMode: false,
@@ -68,6 +150,7 @@ const DEFAULT_SETTINGS = {
 - 전문 용어는 처음 등장 시 간단히 설명
 - 수식은 꼭 필요한 경우만, 직관적 설명과 함께
 - 논문의 주장을 그대로 전달하되, 명백한 과장은 지적
+- 제목은 반드시 #, ##, ### 만 사용 (####는 사용 금지)
 
 ## 논문 정보
 - 제목: {{title}}
@@ -136,6 +219,7 @@ const FULL_ANALYSIS_PROMPT = `당신은 AI/ML 분야 논문을 심층 분석하�
 - 수식은 직관적 설명과 함께 제공
 - 논문의 주장을 그대로 전달하되, 명백한 과장은 지적
 - 가능하면 구체적인 수치와 함께 설명
+- 제목은 반드시 #, ##, ### 만 사용 (####는 사용 금지)
 
 ## 논문 정보
 - 제목: {{title}}
@@ -157,6 +241,16 @@ const PRICING = {
   'o1': { input: 15, output: 60 },
   'o1-mini': { input: 3, output: 12 }
 };
+
+// 토스트 알림 표시
+function showToast(message, type = 'success') {
+  const container = document.getElementById('toastContainer');
+  const toast = document.createElement('div');
+  toast.className = `toast ${type}`;
+  toast.textContent = message;
+  container.appendChild(toast);
+  setTimeout(() => { toast.remove(); }, 3000);
+}
 
 // 테마 적용
 function applyTheme(isDark) {
@@ -260,6 +354,7 @@ function displayTabResult(tab) {
   const resultDiv = document.getElementById('result');
   const copyBtn = document.getElementById('copyBtn');
   const viewPaperBtn = document.getElementById('viewPaperBtn');
+  const notionSaveBtn = document.getElementById('notionSaveBtn');
   const status = document.getElementById('status');
 
   if (state.markdown) {
@@ -267,6 +362,7 @@ function displayTabResult(tab) {
     addCodeCopyButtons();
     resultDiv.style.display = 'block';
     copyBtn.disabled = false;
+    notionSaveBtn.disabled = false;
     if (state.usage && state.model) {
       displayTokenInfo(state.usage, state.model);
     } else {
@@ -276,6 +372,7 @@ function displayTabResult(tab) {
     resultDiv.style.display = 'none';
     resultDiv.innerHTML = '';
     copyBtn.disabled = true;
+    notionSaveBtn.disabled = true;
     document.getElementById('tokenInfo').style.display = 'none';
   }
 
@@ -460,68 +557,10 @@ async function callClaudeStream(data, onChunk) {
   }
 
   const prompt = buildPrompt(currentSettings.userPrompt, data);
+  const fetchOpts = buildClaudeFetchOptions(currentSettings.claudeApiKey, currentSettings.claudeModel, 4096, prompt);
 
-  const response = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': currentSettings.claudeApiKey,
-      'anthropic-version': '2023-06-01',
-      'anthropic-dangerous-direct-browser-access': 'true'
-    },
-    body: JSON.stringify({
-      model: currentSettings.claudeModel,
-      max_tokens: 4096,
-      stream: true,
-      messages: [{ role: 'user', content: prompt }]
-    })
-  });
-
-  if (!response.ok) {
-    const error = await response.json();
-    throw new Error(error.error?.message || 'Claude API 오류');
-  }
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let fullText = '';
-  let usage = { input_tokens: 0, output_tokens: 0 };
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-
-    const chunk = decoder.decode(value);
-    const lines = chunk.split('\n');
-
-    for (const line of lines) {
-      if (line.startsWith('data: ')) {
-        const jsonStr = line.slice(6);
-        if (jsonStr === '[DONE]') continue;
-
-        try {
-          const data = JSON.parse(jsonStr);
-
-          if (data.type === 'content_block_delta' && data.delta?.text) {
-            fullText += data.delta.text;
-            onChunk(fullText);
-          }
-
-          if (data.type === 'message_delta' && data.usage) {
-            usage.output_tokens = data.usage.output_tokens;
-          }
-
-          if (data.type === 'message_start' && data.message?.usage) {
-            usage.input_tokens = data.message.usage.input_tokens;
-          }
-        } catch (e) {
-          // JSON 파싱 에러 무시
-        }
-      }
-    }
-  }
-
-  return { text: fullText, usage };
+  // CORS 우회를 위해 모든 Claude 요청은 background proxy 경유
+  return streamClaudeViaBackground(fetchOpts, onChunk);
 }
 
 // OpenAI API 스트리밍 호출
@@ -657,66 +696,10 @@ async function callClaudeFullAnalysis(data, onChunk) {
   }
 
   const prompt = buildFullAnalysisPrompt(data);
+  const fetchOpts = buildClaudeFetchOptions(currentSettings.claudeApiKey, currentSettings.claudeModel, 8192, prompt);
 
-  const response = await fetch('https://api.anthropic.com/v1/messages', {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'x-api-key': currentSettings.claudeApiKey,
-      'anthropic-version': '2023-06-01',
-      'anthropic-dangerous-direct-browser-access': 'true'
-    },
-    body: JSON.stringify({
-      model: currentSettings.claudeModel,
-      max_tokens: 8192,
-      stream: true,
-      messages: [{ role: 'user', content: prompt }]
-    })
-  });
-
-  if (!response.ok) {
-    const error = await response.json();
-    throw new Error(error.error?.message || 'Claude API 오류');
-  }
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let fullText = '';
-  let usage = { input_tokens: 0, output_tokens: 0 };
-
-  while (true) {
-    const { done, value } = await reader.read();
-    if (done) break;
-
-    const chunk = decoder.decode(value);
-    const lines = chunk.split('\n');
-
-    for (const line of lines) {
-      if (line.startsWith('data: ')) {
-        const jsonStr = line.slice(6);
-        if (jsonStr === '[DONE]') continue;
-
-        try {
-          const parsed = JSON.parse(jsonStr);
-
-          if (parsed.type === 'content_block_delta' && parsed.delta?.text) {
-            fullText += parsed.delta.text;
-            onChunk(fullText);
-          }
-
-          if (parsed.type === 'message_delta' && parsed.usage) {
-            usage.output_tokens = parsed.usage.output_tokens;
-          }
-
-          if (parsed.type === 'message_start' && parsed.message?.usage) {
-            usage.input_tokens = parsed.message.usage.input_tokens;
-          }
-        } catch (e) {}
-      }
-    }
-  }
-
-  return { text: fullText, usage };
+  // CORS 우회를 위해 모든 Claude 요청은 background proxy 경유
+  return streamClaudeViaBackground(fetchOpts, onChunk);
 }
 
 // OpenAI API 전문 분석 스트리밍 호출
@@ -914,6 +897,7 @@ async function renderHistoryModal() {
       </div>
       <div class="history-item-actions">
         <button class="load-btn" data-id="${item.id}">불러오기</button>
+        <button class="btn-notion-save" data-id="${item.id}">📓</button>
         <button class="btn-danger delete-btn" data-id="${item.id}">삭제</button>
       </div>
     </div>
@@ -950,6 +934,29 @@ async function renderHistoryModal() {
       const newHistory = history.filter(h => h.id !== id);
       await chrome.storage.local.set({ history: newHistory });
       renderHistoryModal();
+    });
+  });
+
+  // Notion 저장 버튼
+  historyList.querySelectorAll('.btn-notion-save').forEach(btn => {
+    btn.addEventListener('click', async (e) => {
+      e.stopPropagation();
+      const id = parseInt(btn.dataset.id);
+      const item = allHistory.find(h => h.id === id);
+      if (item) {
+        btn.disabled = true;
+        btn.textContent = '⏳';
+        try {
+          await saveToNotion(item);
+          btn.textContent = '✅';
+          showToast('📓 Notion에 저장되었습니다!', 'success');
+          setTimeout(() => { btn.textContent = '📓'; btn.disabled = false; }, 2000);
+        } catch (err) {
+          btn.textContent = '❌';
+          showToast('Notion 저장 실패: ' + err.message, 'error');
+          setTimeout(() => { btn.textContent = '📓'; btn.disabled = false; }, 2000);
+        }
+      }
     });
   });
 }
@@ -1328,6 +1335,37 @@ document.getElementById('copyBtn').addEventListener('click', async () => {
   }
 });
 
+// Notion 저장 버튼 (푸터)
+document.getElementById('notionSaveBtn').addEventListener('click', async () => {
+  const btn = document.getElementById('notionSaveBtn');
+  const state = tabState[currentTab];
+  if (!state.markdown || !state.paperData) return;
+
+  btn.disabled = true;
+  btn.textContent = '⏳ 저장 중...';
+
+  try {
+    const item = {
+      title: state.paperData.title,
+      url: state.paperData.url,
+      markdown: state.markdown,
+      usage: state.usage,
+      model: state.model,
+      tab: currentTab,
+      provider: currentSettings.provider,
+      timestamp: Date.now()
+    };
+    await saveToNotion(item);
+    btn.textContent = '✅ 저장됨!';
+    showToast('📓 Notion에 저장되었습니다!', 'success');
+    setTimeout(() => { btn.textContent = '📓 Notion'; btn.disabled = false; }, 2000);
+  } catch (err) {
+    btn.textContent = '📓 Notion';
+    btn.disabled = false;
+    showToast('Notion 저장 실패: ' + err.message, 'error');
+  }
+});
+
 // 논문 보기 버튼
 document.getElementById('viewPaperBtn').addEventListener('click', () => {
   const url = getPaperUrl();
@@ -1351,6 +1389,102 @@ document.getElementById('historyModal').addEventListener('click', (e) => {
 // 히스토리 탭 필터
 document.querySelectorAll('.history-tab').forEach(tab => {
   tab.addEventListener('click', () => handleHistoryTabClick(tab.dataset.filter));
+});
+
+// JSON 내보내기
+document.getElementById('exportHistoryBtn').addEventListener('click', async () => {
+  const history = await loadHistory();
+  if (history.length === 0) {
+    alert('내보낼 히스토리가 없습니다.');
+    return;
+  }
+
+  const exportData = {
+    version: 1,
+    exportedAt: new Date().toISOString(),
+    count: history.length,
+    items: history
+  };
+
+  const blob = new Blob([JSON.stringify(exportData, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const date = new Date().toISOString().slice(0, 10);
+
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = `arxiv-summarizer-history-${date}.json`;
+  a.click();
+  URL.revokeObjectURL(url);
+});
+
+// JSON 가져오기
+document.getElementById('importHistoryBtn').addEventListener('click', () => {
+  document.getElementById('importFileInput').click();
+});
+
+document.getElementById('importFileInput').addEventListener('change', async (e) => {
+  const file = e.target.files[0];
+  if (!file) return;
+
+  try {
+    const text = await file.text();
+    const importData = JSON.parse(text);
+
+    // 검증
+    if (!importData.version || !Array.isArray(importData.items)) {
+      throw new Error('올바른 내보내기 파일이 아닙니다.');
+    }
+
+    for (const item of importData.items) {
+      if (!item.title || !item.url || !item.markdown) {
+        throw new Error('필수 필드가 누락된 항목이 있습니다.');
+      }
+    }
+
+    // 기존 히스토리와 병합
+    const existing = await loadHistory();
+    const merged = [...existing];
+
+    for (const importItem of importData.items) {
+      const importPaperId = extractPaperId(importItem.url);
+      const importTab = importItem.tab || 'abstract';
+      const existingIdx = merged.findIndex(h => {
+        const hPaperId = extractPaperId(h.url);
+        return hPaperId === importPaperId && (h.tab || 'abstract') === importTab;
+      });
+
+      if (existingIdx >= 0) {
+        // 같은 논문+탭: 최신 것 유지
+        if ((importItem.timestamp || 0) > (merged[existingIdx].timestamp || 0)) {
+          merged[existingIdx] = importItem;
+        }
+      } else {
+        merged.push(importItem);
+      }
+    }
+
+    // 최신순 정렬
+    merged.sort((a, b) => (b.timestamp || 0) - (a.timestamp || 0));
+
+    // 50개/4MB 제한 적용
+    const MAX_ITEMS = 50;
+    const MAX_STORAGE_BYTES = 4 * 1024 * 1024;
+    while (merged.length > MAX_ITEMS) merged.pop();
+    while (merged.length > 1) {
+      const size = new Blob([JSON.stringify(merged)]).size;
+      if (size <= MAX_STORAGE_BYTES) break;
+      merged.pop();
+    }
+
+    await chrome.storage.local.set({ history: merged });
+    renderHistoryModal();
+    alert(`가져오기 완료! (${importData.items.length}개 중 ${merged.length}개 저장됨)`);
+  } catch (err) {
+    alert('가져오기 실패: ' + err.message);
+  }
+
+  // 파일 입력 초기화
+  e.target.value = '';
 });
 
 // 전체 히스토리 삭제
@@ -1402,6 +1536,507 @@ async function handleContextMenuSummarize() {
   } else {
     // 없으면 새로 분석
     runAbstractAnalysis();
+  }
+}
+
+// ==========================================
+// Notion 연동
+// ==========================================
+
+// Notion 설정 로드
+async function loadNotionSettings() {
+  const local = await chrome.storage.local.get(['notionToken']);
+  const sync = await chrome.storage.sync.get(['notionPageId']);
+  return {
+    token: local.notionToken || '',
+    pageId: sync.notionPageId || '312ee7ef-42c9-8078-bc7b-e357ec4fa11a'
+  };
+}
+
+// Notion DB ID 로드/저장
+async function getNotionDbId() {
+  const { notionDbId } = await chrome.storage.local.get('notionDbId');
+  return notionDbId || null;
+}
+
+async function setNotionDbId(dbId) {
+  await chrome.storage.local.set({ notionDbId: dbId });
+}
+
+// Notion 매핑 로드/저장
+async function getNotionMapping() {
+  const { notionMapping } = await chrome.storage.local.get('notionMapping');
+  return notionMapping || {};
+}
+
+async function updateNotionMapping(paperId, data) {
+  const mapping = await getNotionMapping();
+  mapping[paperId] = { ...(mapping[paperId] || {}), ...data };
+  await chrome.storage.local.set({ notionMapping: mapping });
+}
+
+// 인라인 마크다운 → Notion rich_text 배열 파싱
+function parseInlineMarkdown(text) {
+  const richText = [];
+  // 패턴: **bold**, __bold__, *italic*, _italic_, `code`, [text](url)
+  const regex = /(\*\*(.+?)\*\*|__(.+?)__|`(.+?)`|\*(.+?)\*|_(.+?)_|\[([^\]]+)\]\(([^)]+)\))/g;
+  let lastIndex = 0;
+  let match;
+
+  while ((match = regex.exec(text)) !== null) {
+    // 매치 이전의 일반 텍스트
+    if (match.index > lastIndex) {
+      const plain = text.slice(lastIndex, match.index);
+      if (plain) {
+        richText.push({ type: 'text', text: { content: plain }, annotations: {} });
+      }
+    }
+
+    if (match[2] || match[3]) {
+      // **bold** or __bold__
+      const content = match[2] || match[3];
+      richText.push({ type: 'text', text: { content }, annotations: { bold: true } });
+    } else if (match[4]) {
+      // `code`
+      richText.push({ type: 'text', text: { content: match[4] }, annotations: { code: true } });
+    } else if (match[5] || match[6]) {
+      // *italic* or _italic_
+      const content = match[5] || match[6];
+      richText.push({ type: 'text', text: { content }, annotations: { italic: true } });
+    } else if (match[7] && match[8]) {
+      // [text](url)
+      richText.push({ type: 'text', text: { content: match[7], link: { url: match[8] } }, annotations: {} });
+    }
+
+    lastIndex = regex.lastIndex;
+  }
+
+  // 남은 텍스트
+  if (lastIndex < text.length) {
+    const remaining = text.slice(lastIndex);
+    if (remaining) {
+      richText.push({ type: 'text', text: { content: remaining }, annotations: {} });
+    }
+  }
+
+  // 빈 배열이면 원본 텍스트 그대로
+  if (richText.length === 0) {
+    richText.push({ type: 'text', text: { content: text }, annotations: {} });
+  }
+
+  // 각 항목의 content를 2000자로 제한
+  return richText.map(item => {
+    if (item.text.content.length > 2000) {
+      item.text.content = item.text.content.slice(0, 2000);
+    }
+    return item;
+  });
+}
+
+// 마크다운 → Notion 블록 변환
+function markdownToNotionBlocks(markdown) {
+  const lines = markdown.split('\n');
+  const blocks = [];
+  let i = 0;
+
+  while (i < lines.length && blocks.length < 100) {
+    const line = lines[i];
+
+    // 빈 줄 스킵
+    if (line.trim() === '') { i++; continue; }
+
+    // 수평선 (---, ***, ___)
+    if (/^[-*_]{3,}\s*$/.test(line.trim())) {
+      blocks.push({ object: 'block', type: 'divider', divider: {} });
+      i++; continue;
+    }
+
+    // 마크다운 테이블
+    if (line.trim().startsWith('|') && line.trim().endsWith('|')) {
+      const tableRows = [];
+      while (i < lines.length && lines[i].trim().startsWith('|') && lines[i].trim().endsWith('|')) {
+        const row = lines[i].trim();
+        // 구분선(|---|---|) 스킵
+        if (!/^\|[\s\-:|]+\|$/.test(row)) {
+          const cells = row.slice(1, -1).split('|').map(c => c.trim());
+          tableRows.push(cells);
+        }
+        i++;
+      }
+      if (tableRows.length > 0) {
+        const colCount = Math.max(...tableRows.map(r => r.length));
+        const children = tableRows.map(cells => ({
+          object: 'block', type: 'table_row',
+          table_row: {
+            cells: Array.from({ length: colCount }, (_, ci) => {
+              const cellText = (cells[ci] || '').trim();
+              return cellText ? parseInlineMarkdown(cellText) : [{ type: 'text', text: { content: '' } }];
+            })
+          }
+        }));
+        blocks.push({
+          object: 'block', type: 'table',
+          table: {
+            table_width: colCount,
+            has_column_header: true,
+            has_row_header: false,
+            children
+          }
+        });
+      }
+      continue;
+    }
+
+    // 펜스드 코드블럭 (``` ... ```)
+    if (line.trim().startsWith('```')) {
+      const lang = line.trim().slice(3).trim();
+      const codeLines = [];
+      i++;
+      while (i < lines.length && !lines[i].trim().startsWith('```')) {
+        codeLines.push(lines[i]);
+        i++;
+      }
+      if (i < lines.length) i++; // 닫는 ``` 스킵
+      blocks.push({
+        object: 'block', type: 'code',
+        code: {
+          rich_text: [{ type: 'text', text: { content: truncateText(codeLines.join('\n'), 2000) } }],
+          language: lang || 'plain text'
+        }
+      });
+      continue;
+    }
+
+    // 헤딩 (#### → heading_3 폴백, Notion에 heading_4 없음)
+    if (line.startsWith('#### ')) {
+      blocks.push({
+        object: 'block', type: 'heading_3',
+        heading_3: { rich_text: parseInlineMarkdown(line.slice(5).trim()) }
+      });
+      i++; continue;
+    }
+    if (line.startsWith('### ')) {
+      blocks.push({
+        object: 'block', type: 'heading_3',
+        heading_3: { rich_text: parseInlineMarkdown(line.slice(4).trim()) }
+      });
+      i++; continue;
+    }
+    if (line.startsWith('## ')) {
+      blocks.push({
+        object: 'block', type: 'heading_2',
+        heading_2: { rich_text: parseInlineMarkdown(line.slice(3).trim()) }
+      });
+      i++; continue;
+    }
+    if (line.startsWith('# ')) {
+      blocks.push({
+        object: 'block', type: 'heading_1',
+        heading_1: { rich_text: parseInlineMarkdown(line.slice(2).trim()) }
+      });
+      i++; continue;
+    }
+
+    // 인용문 (blockquote)
+    if (line.startsWith('> ')) {
+      blocks.push({
+        object: 'block', type: 'quote',
+        quote: { rich_text: parseInlineMarkdown(line.slice(2).trim()) }
+      });
+      i++; continue;
+    }
+
+    // 번호 리스트
+    if (/^\d+\.\s/.test(line)) {
+      const content = line.replace(/^\d+\.\s/, '').trim();
+      blocks.push({
+        object: 'block', type: 'numbered_list_item',
+        numbered_list_item: { rich_text: parseInlineMarkdown(content) }
+      });
+      i++; continue;
+    }
+
+    // 불릿 리스트
+    if (line.startsWith('- ') || line.startsWith('* ')) {
+      const content = line.slice(2).trim();
+      blocks.push({
+        object: 'block', type: 'bulleted_list_item',
+        bulleted_list_item: { rich_text: parseInlineMarkdown(content) }
+      });
+      i++; continue;
+    }
+
+    // 일반 문단
+    blocks.push({
+      object: 'block', type: 'paragraph',
+      paragraph: { rich_text: parseInlineMarkdown(line.trim()) }
+    });
+    i++;
+  }
+
+  return blocks;
+}
+
+function truncateText(text, max) {
+  return text.length > max ? text.slice(0, max) : text;
+}
+
+// 키워드 추출 (마크다운에서 "핵심 키워드" 섹션 파싱)
+function extractKeywords(markdown) {
+  const match = markdown.match(/핵심\s*키워드[^\n]*\n([\s\S]*?)(?:\n#|\n---|\n\n\n|$)/i);
+  if (!match) return [];
+
+  const section = match[1];
+  const keywords = [];
+  const lines = section.split('\n');
+  for (const line of lines) {
+    if (!line.trim()) continue;
+
+    // 1) 백틱으로 감싼 키워드 직접 추출: `keyword1` `keyword2`
+    const backtickMatches = line.match(/`([^`]+)`/g);
+    if (backtickMatches && backtickMatches.length > 0) {
+      for (const m of backtickMatches) {
+        const kw = m.replace(/`/g, '').trim();
+        if (kw && kw.length < 50) keywords.push(kw);
+      }
+      if (keywords.length >= 10) break;
+      continue;
+    }
+
+    // 2) **키워드** 패턴 직접 추출: **keyword1** **keyword2**
+    const boldMatches = line.match(/\*\*([^*]+)\*\*/g);
+    if (boldMatches && boldMatches.length > 1) {
+      for (const m of boldMatches) {
+        const kw = m.replace(/\*\*/g, '').trim();
+        if (kw && kw.length < 50) keywords.push(kw);
+      }
+      if (keywords.length >= 10) break;
+      continue;
+    }
+
+    // 3) 일반 텍스트: 구분자로 분리
+    let cleaned = line.replace(/^[-*\d.]\s*/, '').replace(/[`*#]/g, '').trim();
+    if (!cleaned) continue;
+    const parts = cleaned.split(/[,，、·|\/]|\s{2,}/);
+    for (const part of parts) {
+      const kw = part.trim();
+      if (kw && kw.length > 0 && kw.length < 50) keywords.push(kw);
+    }
+    if (keywords.length >= 10) break;
+  }
+  return keywords.slice(0, 10);
+}
+
+// Notion DB 생성 (최초 1회)
+async function ensureNotionDatabase(token, parentPageId) {
+  let dbId = await getNotionDbId();
+  if (dbId) return dbId;
+
+  const response = await chrome.runtime.sendMessage({
+    action: 'notionCreateDatabase',
+    token,
+    body: {
+      parent: { type: 'page_id', page_id: parentPageId },
+      title: [{ type: 'text', text: { content: 'arXiv 논문 요약' } }],
+      icon: { type: 'emoji', emoji: '📊' },
+      properties: {
+        'Title': { title: {} },
+        'URL': { url: {} },
+        'Date': { date: {} },
+        'Keywords': { multi_select: {} },
+        'Provider': { select: { options: [
+          { name: 'CLAUDE', color: 'orange' },
+          { name: 'OPENAI', color: 'green' },
+          { name: 'N8N', color: 'blue' },
+          { name: 'ATLAS', color: 'purple' }
+        ]}},
+        'Model': { rich_text: {} },
+        '전문분석': { checkbox: {} }
+      }
+    }
+  });
+
+  if (!response.success) throw new Error(response.error);
+  dbId = response.data.id;
+  await setNotionDbId(dbId);
+  return dbId;
+}
+
+// Notion에 초록 DB 항목 생성
+async function createNotionAbstractEntry(token, dbId, item) {
+  const keywords = extractKeywords(item.markdown);
+  const blocks = markdownToNotionBlocks(item.markdown);
+
+  const properties = {
+    'Title': { title: [{ text: { content: truncateText(item.title, 2000) } }] },
+    'URL': { url: item.url },
+    'Date': { date: { start: new Date(item.timestamp || Date.now()).toISOString().slice(0, 10) } },
+    'Provider': { select: { name: (item.provider || 'n8n').toUpperCase() } },
+    '전문분석': { checkbox: false }
+  };
+
+  if (item.model) {
+    properties['Model'] = { rich_text: [{ text: { content: item.model } }] };
+  }
+
+  if (keywords.length > 0) {
+    properties['Keywords'] = { multi_select: keywords.map(k => ({ name: k })) };
+  }
+
+  const response = await chrome.runtime.sendMessage({
+    action: 'notionCreatePage',
+    token,
+    body: {
+      parent: { database_id: dbId },
+      properties,
+      children: blocks
+    }
+  });
+
+  if (!response.success) throw new Error(response.error);
+  return response.data.id;
+}
+
+// Notion에 전문 하위 페이지 생성
+async function createNotionFullPage(token, parentPageId, item) {
+  const keywords = extractKeywords(item.markdown);
+  const date = new Date(item.timestamp || Date.now()).toISOString().slice(0, 10);
+
+  // 메타데이터 블록 (본문 최상단)
+  const metaLines = [];
+  if (item.provider) metaLines.push(`Provider: ${item.provider.toUpperCase()}`);
+  if (item.model) metaLines.push(`Model: ${item.model}`);
+  metaLines.push(`Date: ${date}`);
+  if (keywords.length > 0) metaLines.push(`Keywords: ${keywords.join(', ')}`);
+
+  const metaBlock = {
+    object: 'block', type: 'callout',
+    callout: {
+      icon: { type: 'emoji', emoji: '📋' },
+      rich_text: [{ type: 'text', text: { content: metaLines.join('\n') } }],
+      color: 'gray_background'
+    }
+  };
+
+  const blocks = [metaBlock, { object: 'block', type: 'divider', divider: {} }, ...markdownToNotionBlocks(item.markdown)];
+
+  const response = await chrome.runtime.sendMessage({
+    action: 'notionCreatePage',
+    token,
+    body: {
+      parent: { page_id: parentPageId },
+      icon: { type: 'emoji', emoji: '📄' },
+      properties: {
+        title: { title: [{ text: { content: '전문 분석' } }] }
+      },
+      children: blocks
+    }
+  });
+
+  if (!response.success) throw new Error(response.error);
+  return response.data.id;
+}
+
+// Notion 블록 추가 (페이지에 블록 append)
+async function notionAppendBlocks(token, blockId, blocks) {
+  const response = await chrome.runtime.sendMessage({
+    action: 'notionAppendBlocks',
+    token,
+    blockId,
+    body: { children: blocks }
+  });
+  if (!response.success) throw new Error(response.error);
+  return response.data;
+}
+
+// 전문분석 체크박스 업데이트
+async function updateNotionFullCheckbox(token, pageId) {
+  const response = await chrome.runtime.sendMessage({
+    action: 'notionUpdatePage',
+    token,
+    pageId,
+    body: {
+      properties: { '전문분석': { checkbox: true } }
+    }
+  });
+  if (!response.success) throw new Error(response.error);
+}
+
+// Notion 저장 메인 로직
+async function saveToNotion(item) {
+  const { token, pageId } = await loadNotionSettings();
+  if (!token) throw new Error('Notion Integration Token이 설정되지 않았습니다. 설정 페이지에서 입력해주세요.');
+
+  const dbId = await ensureNotionDatabase(token, pageId);
+  const paperId = extractPaperId(item.url);
+  if (!paperId) throw new Error('논문 ID를 추출할 수 없습니다.');
+
+  const mapping = await getNotionMapping();
+  const itemTab = item.tab || 'abstract';
+
+  if (itemTab === 'abstract') {
+    // 초록 저장 (이전 매핑이 있으면 새로 덮어쓰기)
+    const notionPageId = await createNotionAbstractEntry(token, dbId, item);
+    await updateNotionMapping(paperId, { pageId: notionPageId, fullPageId: null });
+
+  } else {
+    // 전문 저장
+    let abstractPageId = mapping[paperId]?.pageId;
+
+    // 기존 매핑의 페이지가 실제로 존재하는지 확인
+    if (abstractPageId) {
+      try {
+        await chrome.runtime.sendMessage({
+          action: 'notionGetPage', token, pageId: abstractPageId
+        });
+      } catch {
+        // 페이지가 삭제된 경우 매핑 초기화
+        abstractPageId = null;
+      }
+    }
+
+    if (!abstractPageId) {
+      // 초록이 아직 Notion에 없음 → 로컬 히스토리에서 초록 찾아서 같이 저장
+      const history = await loadHistory();
+      const abstractItem = history.find(h => {
+        const hPaperId = extractPaperId(h.url);
+        return hPaperId === paperId && (h.tab || 'abstract') === 'abstract';
+      });
+
+      if (abstractItem) {
+        abstractPageId = await createNotionAbstractEntry(token, dbId, abstractItem);
+      } else {
+        const minimalItem = {
+          title: item.title,
+          url: item.url,
+          markdown: `# ${item.title}\n\n(초록 요약 없음 - 전문 분석만 저장됨)`,
+          provider: item.provider || 'n8n',
+          model: item.model,
+          timestamp: item.timestamp
+        };
+        abstractPageId = await createNotionAbstractEntry(token, dbId, minimalItem);
+      }
+      await updateNotionMapping(paperId, { pageId: abstractPageId });
+    }
+
+    // 구분선 + 콜아웃을 먼저 추가 (전문 하위페이지 링크보다 위에 오도록)
+    await notionAppendBlocks(token, abstractPageId, [
+      { object: 'block', type: 'divider', divider: {} },
+      {
+        object: 'block',
+        type: 'callout',
+        callout: {
+          icon: { type: 'emoji', emoji: '📄' },
+          rich_text: [{ type: 'text', text: { content: '📚 전문 분석이 하위 페이지에 포함되어 있습니다.' } }],
+          color: 'blue_background'
+        }
+      }
+    ]);
+
+    // 전문 하위 페이지 생성 (하위 페이지 링크가 callout 아래에 위치)
+    const fullPageId = await createNotionFullPage(token, abstractPageId, item);
+    await updateNotionMapping(paperId, { fullPageId });
+    await updateNotionFullCheckbox(token, abstractPageId);
   }
 }
 

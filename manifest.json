@@ -3,7 +3,7 @@
   "name": "arXiv Summarizer",
   "version": "1.1",
   "description": "arXiv 논문을 n8n/Claude/OpenAI로 요약받기",
-  "permissions": ["activeTab", "scripting", "sidePanel", "storage", "contextMenus"],
+  "permissions": ["activeTab", "scripting", "sidePanel", "storage", "contextMenus", "declarativeNetRequest"],
   "action": {
     "default_icon": "icon.png"
   },
@@ -14,5 +14,12 @@
     "service_worker": "background.js"
   },
   "options_page": "options.html",
-  "host_permissions": ["https://arxiv.org/*", "https://api.anthropic.com/*", "https://api.openai.com/*"]
+  "host_permissions": ["https://arxiv.org/*", "https://api.anthropic.com/*", "https://api.openai.com/*", "https://api.notion.com/*"],
+  "declarative_net_request": {
+    "rule_resources": [{
+      "id": "ruleset_anthropic",
+      "enabled": true,
+      "path": "rules.json"
+    }]
+  }
 }

@@ -77,7 +77,10 @@ const elements = {
   atlasSettings: document.getElementById('atlasSettings'),
   claudeSettings: document.getElementById('claudeSettings'),
   openaiSettings: document.getElementById('openaiSettings'),
-  promptSection: document.getElementById('promptSection')
+  promptSection: document.getElementById('promptSection'),
+  notionToken: document.getElementById('notionToken'),
+  notionPageId: document.getElementById('notionPageId'),
+  testNotionBtn: document.getElementById('testNotionBtn')
 };
 
 // 테마 적용
@@ -124,13 +127,15 @@ async function loadSettings() {
       'claudeModel',
       'openaiModel',
       'summaryLanguage',
-      'userPrompt'
+      'userPrompt',
+      'notionPageId'
     ]);
 
     // local 스토리지에서 API 키 불러오기
     const localData = await chrome.storage.local.get([
       'claudeApiKey',
-      'openaiApiKey'
+      'openaiApiKey',
+      'notionToken'
     ]);
 
     // 설정값 적용 (없으면 기본값 사용)
@@ -145,6 +150,8 @@ async function loadSettings() {
 
     elements.claudeApiKey.value = localData.claudeApiKey ?? '';
     elements.openaiApiKey.value = localData.openaiApiKey ?? '';
+    elements.notionToken.value = localData.notionToken ?? '';
+    elements.notionPageId.value = syncData.notionPageId ?? '312ee7ef-42c9-8078-bc7b-e357ec4fa11a';
 
     // 테마 적용
     applyTheme(elements.darkMode.checked);
@@ -169,13 +176,15 @@ async function saveSettings() {
       claudeModel: elements.claudeModel.value,
       openaiModel: elements.openaiModel.value,
       summaryLanguage: elements.summaryLanguage.value,
-      userPrompt: elements.userPrompt.value
+      userPrompt: elements.userPrompt.value,
+      notionPageId: elements.notionPageId.value
     });
 
     // local 스토리지에 API 키 저장
     await chrome.storage.local.set({
       claudeApiKey: elements.claudeApiKey.value,
-      openaiApiKey: elements.openaiApiKey.value
+      openaiApiKey: elements.openaiApiKey.value,
+      notionToken: elements.notionToken.value
     });
 
     showStatus('✅ 설정이 저장되었습니다!', 'success');
@@ -236,6 +245,39 @@ function setupEventListeners() {
 
   // API 키 토글
   setupApiKeyToggles();
+
+  // Notion 연결 테스트
+  elements.testNotionBtn.addEventListener('click', testNotionConnection);
+}
+
+// Notion 연결 테스트
+async function testNotionConnection() {
+  const token = elements.notionToken.value.trim();
+  if (!token) {
+    showStatus('❌ Notion Integration Token을 입력해주세요.', 'error');
+    return;
+  }
+
+  elements.testNotionBtn.disabled = true;
+  elements.testNotionBtn.textContent = '🔄 테스트 중...';
+
+  try {
+    const response = await chrome.runtime.sendMessage({
+      action: 'notionTest',
+      token
+    });
+
+    if (response.success) {
+      showStatus(`✅ 연결 성공! 워크스페이스: ${response.workspaceName}`, 'success');
+    } else {
+      showStatus('❌ 연결 실패: ' + response.error, 'error');
+    }
+  } catch (e) {
+    showStatus('❌ 연결 테스트 실패: ' + e.message, 'error');
+  } finally {
+    elements.testNotionBtn.disabled = false;
+    elements.testNotionBtn.textContent = '🔗 연결 테스트';
+  }
 }
 
 // 초기화

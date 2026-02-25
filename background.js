@@ -22,6 +22,134 @@ chrome.runtime.onInstalled.addListener(() => {
   });
 });
 
+// Claude API 스트리밍 프록시 (OAuth 토큰 CORS 우회용)
+chrome.runtime.onConnect.addListener((port) => {
+  if (port.name !== 'claude-api-proxy') return;
+
+  port.onMessage.addListener(async (msg) => {
+    try {
+      const response = await fetch(msg.url, {
+        method: 'POST',
+        headers: msg.headers,
+        body: JSON.stringify(msg.body)
+      });
+
+      if (!response.ok) {
+        const error = await response.json();
+        port.postMessage({ type: 'error', error: error.error?.message || 'Claude API 오류' });
+        return;
+      }
+
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        const chunk = decoder.decode(value);
+        const lines = chunk.split('\n');
+
+        for (const line of lines) {
+          if (line.startsWith('data: ')) {
+            const jsonStr = line.slice(6);
+            if (jsonStr === '[DONE]') continue;
+
+            try {
+              const data = JSON.parse(jsonStr);
+
+              if (data.type === 'content_block_delta' && data.delta?.text) {
+                port.postMessage({ type: 'delta', text: data.delta.text });
+              }
+              if (data.type === 'message_delta' && data.usage) {
+                port.postMessage({ type: 'usage_output', output_tokens: data.usage.output_tokens });
+              }
+              if (data.type === 'message_start' && data.message?.usage) {
+                port.postMessage({ type: 'usage_input', input_tokens: data.message.usage.input_tokens });
+              }
+            } catch (e) {}
+          }
+        }
+      }
+
+      port.postMessage({ type: 'done' });
+    } catch (e) {
+      port.postMessage({ type: 'error', error: e.message });
+    }
+  });
+});
+
+// Notion API 프록시 (CORS 우회) + 연결 테스트
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.action === 'notionTest') {
+    notionApiCall('https://api.notion.com/v1/users/me', 'GET', message.token, null)
+      .then(data => sendResponse({ success: true, workspaceName: data.name || 'Unknown' }))
+      .catch(e => sendResponse({ success: false, error: e.message }));
+    return true;
+  }
+
+  if (message.action === 'notionCreateDatabase') {
+    notionApiCall('https://api.notion.com/v1/databases', 'POST', message.token, message.body)
+      .then(data => sendResponse({ success: true, data }))
+      .catch(e => sendResponse({ success: false, error: e.message }));
+    return true;
+  }
+
+  if (message.action === 'notionCreatePage') {
+    notionApiCall('https://api.notion.com/v1/pages', 'POST', message.token, message.body)
+      .then(data => sendResponse({ success: true, data }))
+      .catch(e => sendResponse({ success: false, error: e.message }));
+    return true;
+  }
+
+  if (message.action === 'notionUpdatePage') {
+    notionApiCall(`https://api.notion.com/v1/pages/${message.pageId}`, 'PATCH', message.token, message.body)
+      .then(data => sendResponse({ success: true, data }))
+      .catch(e => sendResponse({ success: false, error: e.message }));
+    return true;
+  }
+
+  if (message.action === 'notionQueryDatabase') {
+    notionApiCall(`https://api.notion.com/v1/databases/${message.databaseId}/query`, 'POST', message.token, message.body || {})
+      .then(data => sendResponse({ success: true, data }))
+      .catch(e => sendResponse({ success: false, error: e.message }));
+    return true;
+  }
+
+  if (message.action === 'notionGetPage') {
+    notionApiCall(`https://api.notion.com/v1/pages/${message.pageId}`, 'GET', message.token)
+      .then(data => sendResponse({ success: true, data }))
+      .catch(e => sendResponse({ success: false, error: e.message }));
+    return true;
+  }
+
+  if (message.action === 'notionAppendBlocks') {
+    notionApiCall(`https://api.notion.com/v1/blocks/${message.blockId}/children`, 'PATCH', message.token, message.body)
+      .then(data => sendResponse({ success: true, data }))
+      .catch(e => sendResponse({ success: false, error: e.message }));
+    return true;
+  }
+});
+
+async function notionApiCall(url, method, token, body) {
+  const options = {
+    method,
+    headers: {
+      'Authorization': `Bearer ${token}`,
+      'Notion-Version': '2022-06-28',
+      'Content-Type': 'application/json'
+    }
+  };
+  if (body) options.body = JSON.stringify(body);
+
+  const response = await fetch(url, options);
+  if (!response.ok) {
+    const error = await response.json().catch(() => ({}));
+    throw new Error(error.message || `Notion API 오류: ${response.status}`);
+  }
+  return response.json();
+}
+
 // 컨텍스트 메뉴 클릭 핸들러
 chrome.contextMenus.onClicked.addListener(async (info, tab) => {
   if (info.menuItemId === 'summarize-page') {
