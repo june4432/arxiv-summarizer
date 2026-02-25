@@ -95,6 +95,13 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     return true;
   }
 
+  if (message.action === 'notionUpdateDatabase') {
+    notionApiCall(`https://api.notion.com/v1/databases/${message.databaseId}`, 'PATCH', message.token, message.body)
+      .then(data => sendResponse({ success: true, data }))
+      .catch(e => sendResponse({ success: false, error: e.message }));
+    return true;
+  }
+
   if (message.action === 'notionCreatePage') {
     notionApiCall('https://api.notion.com/v1/pages', 'POST', message.token, message.body)
       .then(data => sendResponse({ success: true, data }))

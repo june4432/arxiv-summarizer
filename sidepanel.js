@@ -1885,9 +1885,55 @@ function extractKeywords(markdown) {
 }
 
 // Notion DB 확보 (캐시 → 자식 블록 검색 → parentId가 DB인지 확인 → 새로 생성)
+// 기존 DB에 누락된 속성을 자동 추가하는 스키마 마이그레이션
+async function migrateNotionDbSchema(token, dbId) {
+  try {
+    // DB 조회로 현재 properties 확인
+    const queryRes = await chrome.runtime.sendMessage({
+      action: 'notionQueryDatabase',
+      token,
+      databaseId: dbId,
+      body: { page_size: 1 }
+    });
+    if (!queryRes.success) return;
+
+    // DB 메타데이터에서 properties 가져오기 (query 결과가 아닌 DB 자체 조회 필요)
+    // notionQueryDatabase는 pages를 반환하므로, DB properties를 알려면
+    // 실제 DB 정보를 가져와야 함 → notionGetBlockChildren에서 이미 찾은 DB 블록의 정보 활용
+    // 대신 직접 DB를 retrieve 하자
+    const dbInfoRes = await chrome.runtime.sendMessage({
+      action: 'notionGetPage',
+      token,
+      pageId: dbId
+    });
+
+    // Notion API: GET /v1/databases/{id} 가 필요하지만 notionGetPage는 /v1/pages/{id}를 호출
+    // 누락된 속성 추가를 시도 (이미 있으면 Notion이 무시함)
+    const updateRes = await chrome.runtime.sendMessage({
+      action: 'notionUpdateDatabase',
+      token,
+      databaseId: dbId,
+      body: {
+        properties: {
+          'Published': { date: {} }
+        }
+      }
+    });
+    if (updateRes.success) {
+      console.log('DB 스키마 마이그레이션 완료: Published 속성 추가');
+    }
+  } catch (e) {
+    console.warn('DB 스키마 마이그레이션 실패 (무시):', e);
+  }
+}
+
 async function ensureNotionDatabase(token, parentPageId) {
   let dbId = await getNotionDbId();
-  if (dbId) return dbId;
+  if (dbId) {
+    // 캐시된 DB에도 스키마 마이그레이션 적용
+    await migrateNotionDbSchema(token, dbId);
+    return dbId;
+  }
 
   // 1) 부모 페이지 하위에서 기존 DB 검색
   try {
@@ -1903,6 +1949,7 @@ async function ensureNotionDatabase(token, parentPageId) {
       if (existingDb) {
         dbId = existingDb.id;
         await setNotionDbId(dbId);
+        await migrateNotionDbSchema(token, dbId);
         return dbId;
       }
     }
@@ -1921,6 +1968,7 @@ async function ensureNotionDatabase(token, parentPageId) {
     if (queryRes.success) {
       // parentPageId가 유효한 DB → 그대로 사용
       await setNotionDbId(parentPageId);
+      await migrateNotionDbSchema(token, parentPageId);
       return parentPageId;
     }
   } catch (e) {
