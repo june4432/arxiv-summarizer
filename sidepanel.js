@@ -1827,12 +1827,12 @@ function extractKeywords(markdown) {
   return keywords.slice(0, 10);
 }
 
-// Notion DB 확보 (기존 DB 검색 → 없으면 생성)
+// Notion DB 확보 (캐시 → 자식 블록 검색 → parentId가 DB인지 확인 → 새로 생성)
 async function ensureNotionDatabase(token, parentPageId) {
   let dbId = await getNotionDbId();
   if (dbId) return dbId;
 
-  // 부모 페이지 하위에서 기존 DB 검색
+  // 1) 부모 페이지 하위에서 기존 DB 검색
   try {
     const childrenRes = await chrome.runtime.sendMessage({
       action: 'notionGetBlockChildren',
@@ -1841,7 +1841,7 @@ async function ensureNotionDatabase(token, parentPageId) {
     });
     if (childrenRes.success && childrenRes.data?.results) {
       const existingDb = childrenRes.data.results.find(
-        block => block.type === 'child_database' && block.child_database?.title === 'arXiv 논문 요약'
+        block => block.type === 'child_database'
       );
       if (existingDb) {
         dbId = existingDb.id;
@@ -1850,10 +1850,27 @@ async function ensureNotionDatabase(token, parentPageId) {
       }
     }
   } catch (e) {
-    console.warn('기존 DB 검색 실패, 새로 생성 시도:', e);
+    console.warn('자식 블록 검색 실패:', e);
   }
 
-  // 기존 DB 없으면 새로 생성
+  // 2) parentPageId 자체가 DB인지 확인 (사용자가 DB ID를 넣은 경우)
+  try {
+    const queryRes = await chrome.runtime.sendMessage({
+      action: 'notionQueryDatabase',
+      token,
+      databaseId: parentPageId,
+      body: { page_size: 1 }
+    });
+    if (queryRes.success) {
+      // parentPageId가 유효한 DB → 그대로 사용
+      await setNotionDbId(parentPageId);
+      return parentPageId;
+    }
+  } catch (e) {
+    console.warn('DB 직접 조회 실패:', e);
+  }
+
+  // 3) 기존 DB 없으면 새로 생성
   const response = await chrome.runtime.sendMessage({
     action: 'notionCreateDatabase',
     token,
