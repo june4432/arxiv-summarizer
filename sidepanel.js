@@ -2027,11 +2027,14 @@ async function saveToNotion(item) {
     // 기존 매핑의 페이지가 실제로 존재하는지 확인
     if (abstractPageId) {
       try {
-        await chrome.runtime.sendMessage({
+        const pageCheck = await chrome.runtime.sendMessage({
           action: 'notionGetPage', token, pageId: abstractPageId
         });
+        // 페이지가 삭제/아카이브 되었거나 조회 실패 시 매핑 초기화
+        if (!pageCheck.success || pageCheck.data?.archived) {
+          abstractPageId = null;
+        }
       } catch {
-        // 페이지가 삭제된 경우 매핑 초기화
         abstractPageId = null;
       }
     }
