@@ -1047,6 +1047,11 @@ async function runAbstractAnalysis() {
           const submissionText = document.body.innerText.match(/Submitted on\s+(\d{1,2}\s+\w+\s+\d{4})/);
           if (submissionText) publishedDate = submissionText[1];
         }
+        // [v1] Wed, 31 Dec 2025 패턴 (Submission history)
+        if (!publishedDate) {
+          const historyText = document.body.innerText.match(/\[v1\]\s*\w+,\s*(\d{1,2}\s+\w+\s+\d{4})/);
+          if (historyText) publishedDate = historyText[1];
+        }
       }
       return { title, abstract, url, publishedDate };
     }
@@ -1200,6 +1205,11 @@ async function runFullAnalysis() {
           if (!publishedDate) {
             const submissionText = document.body.innerText.match(/Submitted on\s+(\d{1,2}\s+\w+\s+\d{4})/);
             if (submissionText) publishedDate = submissionText[1];
+          }
+          // [v1] Wed, 31 Dec 2025 패턴 (Submission history)
+          if (!publishedDate) {
+            const historyText = document.body.innerText.match(/\[v1\]\s*\w+,\s*(\d{1,2}\s+\w+\s+\d{4})/);
+            if (historyText) publishedDate = historyText[1];
           }
         }
         return { title, url, publishedDate };
